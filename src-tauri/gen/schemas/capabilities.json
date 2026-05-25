@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Default capabilities for the main window","local":true,"windows":["main"],"permissions":["core:default","clipboard-manager:allow-write-text","clipboard-manager:allow-read-text","dialog:allow-open","dialog:allow-save","fs:allow-app-read-recursive","fs:allow-app-write-recursive","shell:allow-open"]}}
