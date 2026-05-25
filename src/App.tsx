@@ -29,10 +29,6 @@ export function App({ prompts, settings = { version: 1, blacklistedApps: [] }, o
     setMode("manager");
   };
 
-  const handleSettings = () => {
-    setMode("settings");
-  };
-
   const handleBackToPopover = () => {
     setMode("popover");
   };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createSettingsStore, type Settings } from "./settingsStore";
+import { createSettingsStore } from "./settingsStore";
 
 function createTestSettingsStore(initial?: string | null) {
   let state = initial ?? null;
