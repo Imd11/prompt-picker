@@ -26,7 +26,7 @@ describe("useInputTargetPolling", () => {
       app: { name: "Codex", bundle_id: "com.codex.app" }
     });
 
-    const { result } = renderHook(() => useInputTargetPolling([]));
+    renderHook(() => useInputTargetPolling([]));
 
     await act(async () => {
       await new Promise((r) => setTimeout(r, 600));
@@ -38,7 +38,7 @@ describe("useInputTargetPolling", () => {
   it("hides button when app is blacklisted", async () => {
     vi.mocked(getFrontmostApp).mockResolvedValue({ name: "Codex", bundle_id: "com.codex.app" });
 
-    const { result } = renderHook(() => useInputTargetPolling(["com.codex.app"]));
+    renderHook(() => useInputTargetPolling(["com.codex.app"]));
 
     await act(async () => {
       await new Promise((r) => setTimeout(r, 600));
@@ -51,7 +51,7 @@ describe("useInputTargetPolling", () => {
     vi.mocked(getFrontmostApp).mockResolvedValue({ name: "Finder", bundle_id: "com.apple.finder" });
     vi.mocked(getCurrentInputTarget).mockResolvedValue(null);
 
-    const { result } = renderHook(() => useInputTargetPolling([]));
+    renderHook(() => useInputTargetPolling([]));
 
     await act(async () => {
       await new Promise((r) => setTimeout(r, 600));

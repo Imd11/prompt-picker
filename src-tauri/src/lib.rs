@@ -22,6 +22,11 @@ fn current_input_target() -> Option<platform::InputTarget> {
     None
 }
 
+#[tauri::command]
+fn paste_prompt(body: String) -> Result<(), String> {
+    platform::macos::paste_prompt(&body)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -33,6 +38,7 @@ pub fn run() {
             accessibility_status_cmd,
             frontmost_app_cmd,
             current_input_target,
+            paste_prompt,
             show_prompt_button,
             hide_prompt_button,
             show_prompt_popover,
