@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { PromptItem } from "./shared/promptTypes";
+import type { Settings } from "./shared/settingsStore";
 import { PromptPopover } from "./ui/PromptPopover";
 import { PromptManager } from "./ui/PromptManager";
 import { SettingsPanel } from "./ui/SettingsPanel";
@@ -9,9 +10,11 @@ import "./styles.css";
 
 interface AppProps {
   prompts: PromptItem[];
+  settings?: Settings;
+  onRemoveBlacklist?: (bundleId: string) => void;
 }
 
-export function App({ prompts }: AppProps) {
+export function App({ prompts, settings = { version: 1, blacklistedApps: [] }, onRemoveBlacklist }: AppProps) {
   const [mode, setMode] = useState<AppMode>("popover");
 
   const handleSelect = async (prompt: PromptItem) => {
@@ -54,7 +57,8 @@ export function App({ prompts }: AppProps) {
   if (mode === "settings") {
     return (
       <div className="app-container">
-        <SettingsPanel onBack={handleBackToPopover} />
+        <SettingsPanel settings={settings} onRemove={onRemoveBlacklist ?? (() => {})} />
+        <button className="back-btn" onClick={handleBackToPopover}>← Back</button>
       </div>
     );
   }
@@ -69,5 +73,3 @@ export function App({ prompts }: AppProps) {
     </div>
   );
 }
-
-export default App;

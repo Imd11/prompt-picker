@@ -1,13 +1,26 @@
+import type { Settings } from "../shared/settingsStore";
+
 interface SettingsPanelProps {
-  onBack: () => void;
+  settings: Settings;
+  onRemove: (bundleId: string) => void;
 }
 
-export function SettingsPanel({ onBack }: SettingsPanelProps) {
+export function SettingsPanel({ settings, onRemove }: SettingsPanelProps) {
   return (
     <div className="settings-panel">
-      <h2>Settings</h2>
-      <p>Blacklist management coming soon...</p>
-      <button onClick={onBack}>← Back</button>
+      <h2>Blacklisted Apps</h2>
+      {settings.blacklistedApps.length === 0 ? (
+        <p className="empty-state">No blacklisted apps</p>
+      ) : (
+        <ul className="blacklist">
+          {settings.blacklistedApps.map((app) => (
+            <li key={app.bundleId}>
+              <span>{app.name}</span>
+              <button onClick={() => onRemove(app.bundleId)}>Remove</button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
