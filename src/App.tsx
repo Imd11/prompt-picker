@@ -9,7 +9,7 @@ import { createTauriPromptStorage } from "./storage/tauriPromptStorage";
 import { createSettingsStore } from "./shared/settingsStore";
 import { createTauriSettingsStorage } from "./storage/tauriSettingsStorage";
 import { useInputTargetPolling } from "./overlay/useInputTargetPolling";
-import { PromptPopover } from "./ui/PromptPopover";
+import { PromptQuickList } from "./ui/PromptQuickList";
 import { PromptManager } from "./ui/PromptManager";
 import { SettingsPanel } from "./ui/SettingsPanel";
 import type { AppMode } from "./app/AppMode";
@@ -123,10 +123,9 @@ export function App({ settings = { version: 1, blacklistedApps: [], overlayPlace
 
   return (
     <div className="app-container">
-      <PromptPopover
+      <PromptQuickList
         prompts={prompts}
         onSelect={handleSelect}
-        onManage={handleManage}
       />
     </div>
   );
