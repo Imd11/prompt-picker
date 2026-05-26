@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { save, open } from "@tauri-apps/plugin-dialog";
+import { writeTextFile, readTextFile } from "@tauri-apps/plugin-fs";
 import type { PromptItem } from "./shared/promptTypes";
 import type { Settings } from "./shared/settingsStore";
 import { createPromptStore } from "./shared/promptStore";
@@ -61,8 +63,27 @@ export function App({ settings = { version: 1, blacklistedApps: [] }, onRemoveBl
             await storeRef.current.reorder(ids);
             setPrompts(await storeRef.current.list());
           }}
-          onImport={() => {}}
-          onExport={() => {}}
+          onImport={async () => {
+            const file = await open({
+              filters: [{ name: "JSON", extensions: ["json"] }],
+              multiple: false,
+            });
+            if (file) {
+              const content = await readTextFile(file as string);
+              await storeRef.current.importJson(content);
+              setPrompts(await storeRef.current.list());
+            }
+          }}
+          onExport={async () => {
+            const path = await save({
+              filters: [{ name: "JSON", extensions: ["json"] }],
+              defaultPath: "prompts.json",
+            });
+            if (path) {
+              const json = await storeRef.current.exportJson();
+              await writeTextFile(path, json);
+            }
+          }}
         />
         <button className="back-btn" onClick={handleBackToPopover}>← Back</button>
       </div>
