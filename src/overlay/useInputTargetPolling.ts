@@ -23,6 +23,8 @@ interface InputTargetPollingOptions {
   onBasePositionChange?: (position: [number, number]) => void;
 }
 
+const DEFAULT_BUTTON_POSITION: [number, number] = [960, 700];
+
 export function useInputTargetPolling(
   blacklist: string[] = [],
   overlayPlacement: OverlayPlacement = { buttonOffset: null },
@@ -32,7 +34,7 @@ export function useInputTargetPolling(
   const [target, setTarget] = useState<InputTarget | null>(null);
   const [showAttached, setShowAttached] = useState(false);
   const lastTargetAppRef = useRef<FrontmostApp | null>(null);
-  const lastButtonPositionRef = useRef<[number, number] | null>(null);
+  const lastButtonPositionRef = useRef<[number, number] | null>(DEFAULT_BUTTON_POSITION);
   const lastTargetAtRef = useRef(0);
   const pollingRef = useRef<boolean>(true);
   const activeRef = useRef(true);
@@ -89,12 +91,11 @@ export function useInputTargetPolling(
             setTimeout(poll, 500 + Math.random() * 500);
             return;
           }
-        } else if (
-          lastTargetAtRef.current > 0 &&
-          lastButtonPositionRef.current &&
-          prevVisibilityRef.current
-        ) {
-          // Keep button visible at last known position (always-visible mode)
+        }
+
+        // No input target and no recent target — show at default/fallback position
+        // This ensures the button appears even on first run before any target is detected
+        if (floatingButtonVisible && lastButtonPositionRef.current) {
           const [x, y] = lastButtonPositionRef.current;
           await showPromptButton(x, y);
           setShowAttached(false);

@@ -1,18 +1,15 @@
 use tauri::Manager;
 
 mod platform;
-pub use platform::{accessibility_status, frontmost_app, AccessibilityStatus, FrontmostApp, CandidateInput};
+pub use platform::{
+    accessibility_status, frontmost_app, AccessibilityStatus, CandidateInput, FrontmostApp,
+};
 mod overlay_position;
 pub use overlay_position::{prompt_button_position, OverlayPoint};
 mod windows;
 pub use windows::{
-    show_prompt_button,
-    hide_prompt_button,
-    show_prompt_popover,
-    show_prompt_popover_from_button,
-    hide_prompt_popover,
-    prompt_button_position_cmd,
-    move_prompt_button_to,
+    hide_prompt_button, hide_prompt_popover, move_prompt_button_to, prompt_button_position_cmd,
+    show_prompt_button, show_prompt_popover, show_prompt_popover_from_button,
 };
 mod macos_panels;
 pub use macos_panels::configure_non_activating_panel;
@@ -49,7 +46,6 @@ fn open_main_window(app: tauri::AppHandle) -> Result<(), String> {
     }
     Ok(())
 }
-
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

@@ -4,8 +4,19 @@
 body { margin: 0; background: transparent; }
 button { width: 32px; height: 32px; background: #4a90d9; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; color: white; }
 button:hover { background: #3a7fc8; }
+#menu { display: none; position: fixed; background: #1e1e1e; border: 1px solid #333; border-radius: 8px; padding: 6px 0; min-width: 160px; box-shadow: 0 4px 16px rgba(0,0,0,0.4); z-index: 99999; }
+#menu.show { display: block; }
+.menu-item { padding: 8px 16px; color: #e0e0e0; font-size: 13px; cursor: pointer; }
+.menu-item:hover { background: #2a2a2a; }
+.menu-item.danger { color: #e06060; }
+.menu-sep { height: 1px; background: #333; margin: 4px 0; }
 </style></head>
 <body><button id="btn">P</button>
+<div id="menu">
+  <div class="menu-item" id="mi-hide">Hide Prompt Button</div>
+  <div class="menu-sep"></div>
+  <div class="menu-item" id="mi-open">Open Prompt Picker</div>
+</div>
 <script type="module">
 const btn = document.getElementById('btn');
 const tauri = window.__TAURI__;
@@ -66,6 +77,29 @@ btn.addEventListener('pointerup', async (event) => {
   start = null;
   dragging = false;
   lastMove = null;
+});
+
+// Right-click context menu
+const menu = document.getElementById('menu');
+btn.addEventListener('contextmenu', (event) => {
+  event.preventDefault();
+  menu.style.left = `${event.clientX}px`;
+  menu.style.top = `${event.clientY}px`;
+  menu.classList.add('show');
+});
+
+document.addEventListener('click', () => {
+  menu.classList.remove('show');
+});
+
+document.getElementById('mi-hide').addEventListener('click', async () => {
+  menu.classList.remove('show');
+  await tauri.core.invoke('hide_prompt_button');
+});
+
+document.getElementById('mi-open').addEventListener('click', async () => {
+  menu.classList.remove('show');
+  await tauri.core.invoke('open_main_window');
 });
 </script>
 </body>
