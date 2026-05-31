@@ -77,26 +77,6 @@ fn frontmost_app_info() -> Option<FrontmostAppInfo> {
     })
 }
 
-fn extract_lsappinfo_field(s: &str, key: &str) -> Option<String> {
-    for line in s.lines() {
-        let line = line.trim();
-        if line.starts_with(key) {
-            if let Some(eq) = line.find('=') {
-                let val = line[eq + 1..].trim().trim_matches('"').trim_matches('\'');
-                if !val.is_empty() {
-                    return Some(val.to_string());
-                }
-            } else if let Some(col) = line.find(':') {
-                let val = line[col + 1..].trim().trim_matches('"').trim_matches('\'');
-                if !val.is_empty() {
-                    return Some(val.to_string());
-                }
-            }
-        }
-    }
-    None
-}
-
 // ── Current Input Target ──────────────────────────────────────────────────────
 
 #[derive(Clone, Debug, Serialize)]
