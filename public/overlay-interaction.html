@@ -88,6 +88,7 @@ function clearPointerInteraction(sequence) {
   lastMove = null;
   dragStartedEmitted = false;
   dragPopoverHidden = false;
+  invoke('set_prompt_button_interaction', { active: false, drag: false }).catch(() => {});
   return true;
 }
 
@@ -193,6 +194,7 @@ btn.addEventListener('pointerdown', (event) => {
   }
 
   const sequence = ++pointerSequence;
+  invoke('set_prompt_button_interaction', { active: true, drag: false }).catch(() => {});
   start = {
     screenX: event.screenX,
     screenY: event.screenY,
@@ -236,6 +238,7 @@ btn.addEventListener('pointermove', (event) => {
     hidePromptPopoverForDrag().catch(() => {});
     emit('prompt-button-drag-started').catch(() => {});
     notifyVisual('drag-start').catch(() => {});
+    invoke('set_prompt_button_interaction', { active: true, drag: true }).catch(() => {});
   }
   dragging = true;
   lastMove = current;

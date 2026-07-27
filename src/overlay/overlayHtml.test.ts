@@ -266,6 +266,22 @@ describe("overlay button html", () => {
     expect(recoveryBlock).not.toContain("show_prompt_button");
   });
 
+  it("forces a real redraw and acknowledges nonce probes without changing readiness", () => {
+    const html = readOverlayHtml();
+    const probeBlock = html.slice(
+      html.indexOf("async function acknowledgeVisualProbe"),
+      html.indexOf("async function recoverFatalRenderer")
+    );
+
+    expect(html).toContain("prompt-button-visual-probe");
+    expect(probeBlock).toContain("calicoRenderer.redrawCurrentFrame()");
+    expect(probeBlock).toContain("visibleCalicoAlphaPixels()");
+    expect(probeBlock).toContain("ack_prompt_button_visual_probe");
+    expect(probeBlock).not.toContain("reportRendererReady");
+    expect(probeBlock).not.toContain("calicoIdleDirector");
+    expect(html).not.toContain("const resumed = state === 'ready' ||");
+  });
+
   it("keeps click-to-open separate from hover attention", () => {
     const html = readOverlayInteractionHtml();
     const clickBlock = html.slice(

@@ -330,7 +330,9 @@ async function resumeAndReportReady() {
   const promise = (async () => {
     const state = calicoRenderer.diagnostics().state;
     if (state === 'lost') calicoMotion.suspend({ retainFrame: true });
-    const resumed = state === 'ready' || await Promise.resolve(calicoMotion.resume());
+    const resumed = state === 'ready'
+      ? calicoRenderer.redrawCurrentFrame()
+      : await Promise.resolve(calicoMotion.resume());
     if (!resumed || generation !== lifecycleGeneration) return false;
     const outcome = await reportRendererReady(true);
     if (!readinessTransitionApplied(outcome) || generation !== lifecycleGeneration) return false;
@@ -343,6 +345,38 @@ async function resumeAndReportReady() {
   } finally {
     if (lifecyclePromise?.promise === promise) lifecyclePromise = null;
   }
+}
+
+function visibleCalicoAlphaPixels() {
+  const context = calicoCanvas.getContext('2d', { alpha: true });
+  if (!context) return 0;
+  const pixels = context.getImageData(0, 0, calicoCanvas.width, calicoCanvas.height).data;
+  let visible = 0;
+  for (let index = 3; index < pixels.length; index += 4) {
+    if (pixels[index] > 8) visible += 1;
+  }
+  return visible;
+}
+
+async function acknowledgeVisualProbe(payload = {}) {
+  if (payload.rendererInstanceId !== rendererInstanceId) return;
+  let redrawn = false;
+  if (!calicoRenderer || !calicoMotion) {
+    redrawn = await initializeCalicoMotion();
+  } else {
+    const state = calicoRenderer.diagnostics().state;
+    if (state === 'lost') calicoMotion.suspend({ retainFrame: true });
+    redrawn = state === 'ready'
+      ? calicoRenderer.redrawCurrentFrame()
+      : await Promise.resolve(calicoMotion.resume());
+  }
+  await new Promise((resolve) => window.requestAnimationFrame(resolve));
+  await invokeOrThrow('ack_prompt_button_visual_probe', {
+    rendererInstanceId,
+    recoveryGeneration: payload.recoveryGeneration,
+    nonce: payload.nonce,
+    visibleAlphaPixels: redrawn ? visibleCalicoAlphaPixels() : 0,
+  });
 }
 
 async function recoverFatalRenderer(generation) {
@@ -582,6 +616,11 @@ if (tauri?.event?.listen) {
   tauri.event.listen('prompt-button-renderer-resume-requested', () => {
     resumeAndReportReady().catch(reportFatalRendererError);
   }).catch((error) => console.error('Failed to listen for renderer resume', error));
+  tauri.event.listen('prompt-button-visual-probe', (event) => {
+    acknowledgeVisualProbe(event.payload).catch((error) => {
+      console.error('Failed to acknowledge Calico visual probe', error);
+    });
+  }).catch((error) => console.error('Failed to listen for Calico visual probes', error));
   tauri.event.listen('tauri://scale-change', (event) => {
     const nextDpr = Number(event.payload?.scaleFactor) || window.devicePixelRatio || 1;
     resizeCalicoBackingStore(nextDpr).catch(reportFatalRendererError);

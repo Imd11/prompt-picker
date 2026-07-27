@@ -1,4 +1,6 @@
 #[cfg(target_os = "macos")]
+use block2::RcBlock;
+#[cfg(target_os = "macos")]
 use objc2::{
     ffi::OBJC_ASSOCIATION_RETAIN_NONATOMIC,
     runtime::{AnyClass, AnyObject, Bool, Imp, NSObject, NSObjectProtocol, Sel},
@@ -6,14 +8,14 @@ use objc2::{
 };
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationOptions, NSColor, NSEvent, NSPanel, NSRunningApplication,
-    NSScreenSaverWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindow,
-    NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSApplication, NSApplicationActivationOptions, NSBitmapFormat, NSBitmapImageRep, NSColor,
+    NSEvent, NSImage, NSPanel, NSRunningApplication, NSScreenSaverWindowLevel, NSTrackingArea,
+    NSTrackingAreaOptions, NSView, NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 #[cfg(target_os = "macos")]
-use objc2_foundation::{NSNumber, NSRect, NSString};
+use objc2_foundation::{NSError, NSNumber, NSRect, NSString};
 #[cfg(target_os = "macos")]
-use objc2_web_kit::WKWebView;
+use objc2_web_kit::{WKSnapshotConfiguration, WKWebView};
 #[cfg(target_os = "macos")]
 use tauri::{Emitter, Manager};
 
@@ -478,6 +480,83 @@ pub fn configure_transparent_webview_window(window: &tauri::WebviewWindow) -> Re
     run_on_main_thread_sync(&app, move || {
         configure_transparent_webview_window_on_main_thread(&window)
     })
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn request_calico_webview_snapshot<F>(
+    window: &tauri::WebviewWindow,
+    completion: F,
+) -> Result<(), String>
+where
+    F: FnOnce(Result<u64, String>) + Send + 'static,
+{
+    let completion = std::sync::Arc::new(std::sync::Mutex::new(Some(completion)));
+    window
+        .with_webview(move |webview| {
+            let view = unsafe { &*webview.inner().cast::<WKWebView>() };
+            let completion_for_block = completion.clone();
+            let block = RcBlock::new(move |image: *mut NSImage, _error: *mut NSError| {
+                let result = if image.is_null() {
+                    Err("WKWebView snapshot returned no image.".to_string())
+                } else {
+                    count_visible_snapshot_pixels(unsafe { &*image })
+                };
+                if let Some(completion) = completion_for_block
+                    .lock()
+                    .expect("snapshot completion lock poisoned")
+                    .take()
+                {
+                    completion(result);
+                }
+            });
+            let mtm = objc2::MainThreadMarker::new().expect("WKWebView callback is on main thread");
+            let configuration = unsafe { WKSnapshotConfiguration::new(mtm) };
+            unsafe {
+                configuration.setAfterScreenUpdates(true);
+                view.takeSnapshotWithConfiguration_completionHandler(Some(&configuration), &block);
+            }
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn count_visible_snapshot_pixels(image: &NSImage) -> Result<u64, String> {
+    let data = image
+        .TIFFRepresentation()
+        .ok_or_else(|| "WKWebView snapshot has no TIFF representation.".to_string())?;
+    let bitmap = NSBitmapImageRep::initWithData(NSBitmapImageRep::alloc(), &data)
+        .ok_or_else(|| "WKWebView snapshot could not be decoded.".to_string())?;
+    if bitmap.isPlanar() || bitmap.bitsPerSample() != 8 || !bitmap.hasAlpha() {
+        return Err("WKWebView snapshot has an unsupported pixel layout.".to_string());
+    }
+    let width = bitmap.pixelsWide().max(0) as usize;
+    let height = bitmap.pixelsHigh().max(0) as usize;
+    let samples = bitmap.samplesPerPixel().max(0) as usize;
+    let bytes_per_row = bitmap.bytesPerRow().max(0) as usize;
+    let data = bitmap.bitmapData();
+    if width == 0 || height == 0 || samples < 2 || bytes_per_row == 0 || data.is_null() {
+        return Err("WKWebView snapshot has no pixel data.".to_string());
+    }
+    let alpha_index = if bitmap.bitmapFormat().contains(NSBitmapFormat::AlphaFirst) {
+        0
+    } else {
+        samples - 1
+    };
+    let min_x = width * 27 / 100;
+    let max_x = width * 73 / 100;
+    let min_y = height * 27 / 100;
+    let max_y = height * 73 / 100;
+    let bytes = unsafe { std::slice::from_raw_parts(data, bytes_per_row * height) };
+    let mut visible = 0u64;
+    for y in min_y..max_y {
+        for x in min_x..max_x {
+            let offset = y * bytes_per_row + x * samples + alpha_index;
+            if offset < bytes.len() && bytes[offset] > 8 {
+                visible += 1;
+            }
+        }
+    }
+    Ok(visible)
 }
 
 #[cfg(target_os = "macos")]

@@ -581,10 +581,10 @@ export function App({
     autosendInFlightRef.current = true;
     setSubmittingPromptId(prompt.id);
     try {
+      await emitAutosendActivity(true);
       await hidePromptPopover();
       await waitForWindowHide();
       setSubmittingPromptId(null);
-      await emitAutosendActivity(true);
       const bodies = getPromptContainerBodies(prompt);
       if (bodies.length === 0) {
         emitCalicoMotion("notification", "autosend-empty-prompt", 5200);

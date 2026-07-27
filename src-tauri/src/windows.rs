@@ -740,18 +740,20 @@ fn refresh_prompt_pick_session_capture(
     }
 }
 
-fn build_prompt_button_window(
+pub(crate) fn build_prompt_button_window(
     app: &tauri::AppHandle,
     x: f64,
     y: f64,
 ) -> Result<tauri::WebviewWindow, String> {
     let renderer_state = app.state::<crate::PromptButtonRendererState>();
     let renderer_instance_id = renderer_state.allocate_instance();
+    let visual_health = app.state::<crate::visual_liveness::PromptButtonVisualHealthState>();
+    visual_health.register_instance(renderer_instance_id, false, false);
     let monitor = app.primary_monitor().map_err(|e| e.to_string())?;
     let (x, y) = clamp_button_position_for_monitor(x, y, monitor.as_ref());
     let (window_x, window_y) = prompt_button_visual_to_window_position(x, y);
     let overlay_url = format!("overlay.html?rendererInstanceId={renderer_instance_id}");
-    let window = WebviewWindowBuilder::new(
+    let window = match WebviewWindowBuilder::new(
         app,
         BUTTON_WINDOW_LABEL,
         WebviewUrl::App(overlay_url.into()),
@@ -767,17 +769,58 @@ fn build_prompt_button_window(
     .visible(false)
     .position(window_x, window_y)
     .build()
-    .map_err(|e| e.to_string())?;
+    {
+        Ok(window) => window,
+        Err(error) => {
+            visual_health.record_recovery_failure();
+            return Err(error.to_string());
+        }
+    };
 
     let recovery_url = window.url().map_err(|error| error.to_string())?;
     app.state::<crate::PromptButtonRecoveryUrlState>()
         .store(recovery_url);
 
-    if BUTTON_WINDOW_TRANSPARENT {
-        crate::macos_panels::configure_transparent_webview_window(&window)?;
+    let pair_result = (|| {
+        if BUTTON_WINDOW_TRANSPARENT {
+            crate::macos_panels::configure_transparent_webview_window(&window)?;
+        }
+        build_prompt_button_input_window(app, x, y)?;
+        Ok::<(), String>(())
+    })();
+    if let Err(error) = pair_result {
+        let _ = window.hide();
+        let _ = window.destroy();
+        if let Some(input) = app.get_webview_window(BUTTON_INPUT_WINDOW_LABEL) {
+            let _ = input.hide();
+            let _ = input.destroy();
+        }
+        visual_health.record_recovery_failure();
+        return Err(error);
     }
-    build_prompt_button_input_window(app, x, y)?;
+    visual_health.commit_pair(renderer_instance_id);
+    if renderer_state.is_ready() && visual_health.may_present(renderer_instance_id) {
+        show_ready_prompt_button_window(app)?;
+    }
     Ok(window)
+}
+
+pub(crate) fn destroy_prompt_button_pair<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<(), String> {
+    hide_prompt_button_pair(app)?;
+    if let Some(window) = app.get_webview_window(BUTTON_INPUT_WINDOW_LABEL) {
+        window.destroy().map_err(|error| error.to_string())?;
+    }
+    if let Some(window) = app.get_webview_window(BUTTON_WINDOW_LABEL) {
+        window.destroy().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+pub(crate) fn prompt_button_pair_is_absent<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool {
+    app.get_webview_window(BUTTON_WINDOW_LABEL).is_none()
+        && app.get_webview_window(BUTTON_INPUT_WINDOW_LABEL).is_none()
 }
 
 fn build_prompt_button_input_window(
@@ -832,6 +875,12 @@ fn ensure_prompt_button_input_window(
 }
 
 pub(crate) fn show_ready_prompt_button_window(app: &tauri::AppHandle) -> Result<(), String> {
+    if app
+        .try_state::<crate::visual_liveness::PromptButtonVisualHealthState>()
+        .is_some_and(|state| !state.may_present_current())
+    {
+        return Ok(());
+    }
     let Some(window) = app.get_webview_window(BUTTON_WINDOW_LABEL) else {
         return Err("Prompt button window is missing.".to_string());
     };
@@ -862,6 +911,12 @@ pub fn show_prompt_button(x: f64, y: f64, app: tauri::AppHandle) -> Result<(), S
     if app
         .try_state::<crate::PromptButtonVisibilityState>()
         .is_some_and(|state| !state.desired_visible())
+    {
+        return Ok(());
+    }
+    if app
+        .try_state::<crate::visual_liveness::PromptButtonVisualHealthState>()
+        .is_some_and(|state| !state.allow_show_or_record_position(x, y))
     {
         return Ok(());
     }
@@ -928,10 +983,16 @@ pub fn show_prompt_button(x: f64, y: f64, app: tauri::AppHandle) -> Result<(), S
 
 #[tauri::command]
 pub fn hide_prompt_button(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window(BUTTON_WINDOW_LABEL) {
+    hide_prompt_button_pair(&app)
+}
+
+pub(crate) fn hide_prompt_button_pair<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(BUTTON_INPUT_WINDOW_LABEL) {
         window.hide().map_err(|e| e.to_string())?;
     }
-    if let Some(window) = app.get_webview_window(BUTTON_INPUT_WINDOW_LABEL) {
+    if let Some(window) = app.get_webview_window(BUTTON_WINDOW_LABEL) {
         window.hide().map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -950,6 +1011,11 @@ pub fn hide_prompt_popover(app: tauri::AppHandle) -> Result<(), String> {
         window.hide().map_err(|e| e.to_string())?;
         set_outside_click_monitor_active(false);
         if was_visible {
+            if let Some(health) =
+                app.try_state::<crate::visual_liveness::PromptButtonVisualHealthState>()
+            {
+                health.extend_interaction(crate::visual_liveness::POPOVER_DISMISS_GRACE);
+            }
             emit_popover_dismissed(&app);
         }
     }
@@ -983,6 +1049,9 @@ pub async fn toggle_prompt_popover_from_button(
     recent_state: tauri::State<'_, crate::LastInputTargetState>,
     app: tauri::AppHandle,
 ) -> Result<PromptPopoverToggleOutcome, String> {
+    if let Some(health) = app.try_state::<crate::visual_liveness::PromptButtonVisualHealthState>() {
+        health.extend_interaction(crate::visual_liveness::POINTER_LEASE_TIMEOUT);
+    }
     let request_state = app.state::<PopoverModeRequestState>();
     if request_state.is_pending_mode("popover") {
         request_state.cancel();
@@ -1020,6 +1089,9 @@ pub async fn toggle_prompt_popover_from_button(
 
 #[tauri::command]
 pub async fn show_prompt_button_controls_from_button(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(health) = app.try_state::<crate::visual_liveness::PromptButtonVisualHealthState>() {
+        health.extend_interaction(crate::visual_liveness::POINTER_LEASE_TIMEOUT);
+    }
     let position = button_relative_popover_position(
         &app,
         BUTTON_VISUAL_WIDTH,

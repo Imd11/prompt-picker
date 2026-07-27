@@ -2,7 +2,7 @@ use tauri::{
     image::Image,
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    Emitter, Manager, WindowEvent,
+    Emitter, Listener, Manager, WindowEvent,
 };
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
@@ -19,6 +19,8 @@ pub use platform::{
 };
 mod overlay_position;
 pub use overlay_position::{prompt_button_position, OverlayPoint};
+mod visual_liveness;
+mod visual_liveness_log;
 mod windows;
 pub use windows::{
     acknowledge_prompt_popover_mode, hide_prompt_button, hide_prompt_popover,
@@ -1369,7 +1371,9 @@ impl PromptPickSessionState {
         };
         let window_ready = identity.window.is_some();
         let page_url_ready = identity.page_url.is_some()
-            || !platform::macos::target_bundle_is_supported_browser(&identity.application.bundle_id);
+            || !platform::macos::target_bundle_is_supported_browser(
+                &identity.application.bundle_id,
+            );
         window_ready && page_url_ready
     }
 
@@ -1674,6 +1678,7 @@ fn set_prompt_button_renderer_ready(
     app: tauri::AppHandle,
     renderer_state: tauri::State<PromptButtonRendererState>,
     visibility_state: tauri::State<PromptButtonVisibilityState>,
+    visual_health: tauri::State<visual_liveness::PromptButtonVisualHealthState>,
 ) -> PromptButtonRendererReadyOutcome {
     let Some(snapshot) = renderer_state.accept(
         renderer_instance_id,
@@ -1692,12 +1697,14 @@ fn set_prompt_button_renderer_ready(
         };
     };
 
+    visual_health.note_renderer_ready(renderer_instance_id, ready);
     let applied = renderer_state.action_is_current(snapshot, visibility_state.inner())
         && match snapshot.action {
             PromptButtonRendererAction::Ignore => false,
             PromptButtonRendererAction::HideCurrent => hide_prompt_button(app.clone()).is_ok(),
             PromptButtonRendererAction::ShowCurrent => {
-                crate::windows::show_ready_prompt_button_window(&app).is_ok()
+                visual_health.may_present(renderer_instance_id)
+                    && crate::windows::show_ready_prompt_button_window(&app).is_ok()
             }
         };
 
@@ -1711,16 +1718,112 @@ fn set_prompt_button_renderer_ready(
     }
 }
 
-fn is_prompt_button_webview(label: &str) -> bool {
-    label == crate::windows::BUTTON_WINDOW_LABEL
+#[tauri::command]
+fn ack_prompt_button_visual_probe(
+    renderer_instance_id: u64,
+    recovery_generation: u64,
+    nonce: u64,
+    visible_alpha_pixels: u64,
+    app: tauri::AppHandle,
+    visual_health: tauri::State<visual_liveness::PromptButtonVisualHealthState>,
+) -> visual_liveness::VisualProbeAck {
+    let acknowledgement = visual_health.accept_probe_ack(
+        renderer_instance_id,
+        recovery_generation,
+        nonce,
+        visible_alpha_pixels,
+    );
+    record_visual_liveness_event(
+        &app,
+        if acknowledgement.visually_alive {
+            "probe_alive"
+        } else {
+            "probe_blank"
+        },
+    );
+    if acknowledgement.accepted && acknowledgement.visually_alive {
+        #[cfg(target_os = "macos")]
+        {
+            if native_visual_snapshot_spike_enabled() {
+                if let Some(window) = app.get_webview_window(crate::windows::BUTTON_WINDOW_LABEL) {
+                    let snapshot_app = app.clone();
+                    let request = crate::macos_panels::request_calico_webview_snapshot(
+                        &window,
+                        move |result| {
+                            let pixels = result.unwrap_or(0);
+                            let accepted = snapshot_app
+                                .state::<visual_liveness::PromptButtonVisualHealthState>()
+                                .accept_snapshot_result(
+                                    renderer_instance_id,
+                                    recovery_generation,
+                                    nonce,
+                                    pixels,
+                                );
+                            if accepted {
+                                record_visual_liveness_event(
+                                    &snapshot_app,
+                                    if pixels >= visual_liveness::MIN_VISIBLE_ALPHA_PIXELS {
+                                        "snapshot_alive"
+                                    } else {
+                                        "snapshot_blank"
+                                    },
+                                );
+                            }
+                        },
+                    );
+                    if request.is_err() {
+                        record_visual_liveness_event(&app, "snapshot_request_failed");
+                    }
+                }
+            } else {
+                visual_health.accept_snapshot_result(
+                    renderer_instance_id,
+                    recovery_generation,
+                    nonce,
+                    visible_alpha_pixels,
+                );
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            visual_health.accept_snapshot_result(
+                renderer_instance_id,
+                recovery_generation,
+                nonce,
+                visible_alpha_pixels,
+            );
+        }
+    }
+    acknowledgement
 }
 
-const PROMPT_BUTTON_TERMINATION_RETRY_DELAYS_MS: [u64; 3] = [0, 100, 400];
+#[cfg(target_os = "macos")]
+fn native_visual_snapshot_spike_enabled() -> bool {
+    std::env::var("SLEEPY_CAT_VISUAL_SNAPSHOT_SPIKE").as_deref() == Ok("1")
+}
 
-fn prompt_button_termination_retry_delay(attempt: usize) -> Option<u64> {
-    PROMPT_BUTTON_TERMINATION_RETRY_DELAYS_MS
-        .get(attempt)
-        .copied()
+fn record_visual_liveness_event(app: &tauri::AppHandle, event: &'static str) {
+    let Some(health) = app.try_state::<visual_liveness::PromptButtonVisualHealthState>() else {
+        return;
+    };
+    let (instance, generation) = health.diagnostic_identity();
+    if let Some(logger) = app.try_state::<visual_liveness_log::VisualLivenessLogger>() {
+        logger.record(event, health.stage().as_str(), instance, generation);
+    }
+}
+
+#[tauri::command]
+fn set_prompt_button_interaction(
+    active: bool,
+    drag: bool,
+    visual_health: tauri::State<visual_liveness::PromptButtonVisualHealthState>,
+) {
+    visual_health.set_interaction_active(active, drag);
+}
+
+fn is_prompt_button_webview(label: &str) -> bool {
+    label == crate::windows::BUTTON_WINDOW_LABEL
 }
 
 fn prompt_button_recovery_url(
@@ -1772,7 +1875,7 @@ fn recover_prompt_button_webview_once<R: tauri::Runtime>(
     let recovery_url = perform_prompt_button_webview_recovery(
         stored_url,
         instance_id,
-        || window.hide().map_err(|error| error.to_string()),
+        || crate::windows::hide_prompt_button_pair(app),
         || window.url().map_err(|error| error.to_string()),
         |url| window.navigate(url).map_err(|error| error.to_string()),
     )?;
@@ -1781,84 +1884,124 @@ fn recover_prompt_button_webview_once<R: tauri::Runtime>(
     Ok(())
 }
 
-fn queue_prompt_button_webcontent_recovery<R: tauri::Runtime>(
-    app: tauri::AppHandle<R>,
-    instance_id: u64,
-    attempt: usize,
-) -> Result<(), String> {
-    let queued_app = app.clone();
-    app.run_on_main_thread(move || {
-        match recover_prompt_button_webview_once(&queued_app, instance_id) {
-            Ok(()) => {
-                eprintln!(
-                    "Recovered prompt button WebContent in the existing window on attempt {}.",
-                    attempt + 1
-                );
+fn execute_prompt_button_visual_action(
+    app: &tauri::AppHandle,
+    action: visual_liveness::VisualMonitorAction,
+) {
+    match action {
+        visual_liveness::VisualMonitorAction::None => {}
+        visual_liveness::VisualMonitorAction::Probe(probe) => {
+            record_visual_liveness_event(app, "probe_requested");
+            if app
+                .emit_to(
+                    crate::windows::BUTTON_WINDOW_LABEL,
+                    "prompt-button-visual-probe",
+                    probe,
+                )
+                .is_err()
+            {
+                app.state::<visual_liveness::PromptButtonVisualHealthState>()
+                    .mark_unresponsive();
             }
-            Err(error) => {
-                eprintln!(
-                    "Prompt button WebContent recovery attempt {} failed: {error}",
-                    attempt + 1
-                );
-                let renderer_state = queued_app.state::<PromptButtonRendererState>();
-                if renderer_state.instance_is_current_unready(instance_id)
-                    && prompt_button_termination_retry_delay(attempt + 1).is_some()
-                {
-                    if let Err(schedule_error) = schedule_prompt_button_webcontent_recovery(
-                        queued_app.clone(),
-                        instance_id,
-                        attempt + 1,
-                    ) {
-                        eprintln!(
-                            "Failed to schedule prompt button WebContent recovery attempt {}: {schedule_error}",
-                            attempt + 2
-                        );
-                    }
+        }
+        visual_liveness::VisualMonitorAction::Reload => {
+            record_visual_liveness_event(app, "reload_requested");
+            let renderer_state = app.state::<PromptButtonRendererState>();
+            let instance_id = renderer_state.allocate_instance();
+            app.state::<visual_liveness::PromptButtonVisualHealthState>()
+                .begin_reload(instance_id);
+            let recovery_app = app.clone();
+            let queue_result = app.run_on_main_thread(move || {
+                if let Err(error) = recover_prompt_button_webview_once(&recovery_app, instance_id) {
+                    eprintln!("Prompt button WebContent reload failed: {error}");
+                    recovery_app
+                        .state::<visual_liveness::PromptButtonVisualHealthState>()
+                        .record_recovery_failure();
                 }
+            });
+            if let Err(error) = queue_result {
+                eprintln!("Failed to queue prompt button WebContent reload: {error}");
+                app.state::<visual_liveness::PromptButtonVisualHealthState>()
+                    .record_recovery_failure();
             }
         }
-    })
-    .map_err(|error| format!("Failed to queue prompt button WebContent recovery: {error}"))
-}
-
-fn schedule_prompt_button_webcontent_recovery<R: tauri::Runtime>(
-    app: tauri::AppHandle<R>,
-    instance_id: u64,
-    attempt: usize,
-) -> Result<(), String> {
-    let delay_ms = prompt_button_termination_retry_delay(attempt)
-        .ok_or_else(|| "Prompt button WebContent recovery attempts are exhausted.".to_string())?;
-    if delay_ms == 0 {
-        return queue_prompt_button_webcontent_recovery(app, instance_id, attempt);
-    }
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-        if let Err(error) = queue_prompt_button_webcontent_recovery(app, instance_id, attempt) {
-            eprintln!(
-                "Failed to queue prompt button WebContent recovery attempt {}: {error}",
-                attempt + 1
-            );
+        visual_liveness::VisualMonitorAction::Rebuild => {
+            record_visual_liveness_event(app, "rebuild_requested");
+            let visual_health = app.state::<visual_liveness::PromptButtonVisualHealthState>();
+            let generation = visual_health.begin_rebuild_attempt();
+            let requested_visibility_generation =
+                app.state::<PromptButtonVisibilityState>().generation();
+            let position = visual_health.latest_position().unwrap_or_else(|| {
+                let settings = app.state::<SettingsFileState>();
+                startup_prompt_button_position(settings.inner())
+            });
+            let rebuild_app = app.clone();
+            let queue_result = app.run_on_main_thread(move || {
+                let visibility = rebuild_app.state::<PromptButtonVisibilityState>();
+                let health = rebuild_app.state::<visual_liveness::PromptButtonVisualHealthState>();
+                if !visibility.may_show(requested_visibility_generation)
+                    || !health.generation_is_current(generation)
+                {
+                    return;
+                }
+                if let Err(error) = crate::windows::destroy_prompt_button_pair(&rebuild_app) {
+                    eprintln!("Failed to destroy prompt button pair: {error}");
+                    health.record_recovery_failure();
+                    return;
+                }
+                if !crate::windows::prompt_button_pair_is_absent(&rebuild_app) {
+                    health.record_recovery_failure();
+                    return;
+                }
+                if !visibility.may_show(requested_visibility_generation)
+                    || !health.generation_is_current(generation)
+                {
+                    return;
+                }
+                if let Err(error) =
+                    crate::windows::build_prompt_button_window(&rebuild_app, position.0, position.1)
+                {
+                    eprintln!("Failed to rebuild prompt button pair: {error}");
+                }
+            });
+            if let Err(error) = queue_result {
+                eprintln!("Failed to queue prompt button pair rebuild: {error}");
+                app.state::<visual_liveness::PromptButtonVisualHealthState>()
+                    .record_recovery_failure();
+            }
         }
-    });
-    Ok(())
+    }
 }
 
-fn handle_prompt_button_webcontent_termination<R: tauri::Runtime>(
-    app: &tauri::AppHandle<R>,
-    label: &str,
-) -> bool {
+fn run_prompt_button_visual_monitor_once(app: &tauri::AppHandle) {
+    let visibility = app.state::<PromptButtonVisibilityState>();
+    let renderer_ready = app.state::<PromptButtonRendererState>().is_ready();
+    let action = app
+        .state::<visual_liveness::PromptButtonVisualHealthState>()
+        .plan_monitor(
+            visibility.desired_visible(),
+            renderer_ready,
+            app.get_webview_window(crate::windows::BUTTON_WINDOW_LABEL)
+                .is_some(),
+            app.get_webview_window(crate::windows::BUTTON_INPUT_WINDOW_LABEL)
+                .is_some(),
+        );
+    execute_prompt_button_visual_action(app, action);
+}
+
+fn handle_prompt_button_webcontent_termination(app: &tauri::AppHandle, label: &str) -> bool {
     if !is_prompt_button_webview(label) {
         return false;
     }
-    let renderer_state = app.state::<PromptButtonRendererState>();
-    let instance_id = renderer_state.allocate_instance();
-    match schedule_prompt_button_webcontent_recovery(app.clone(), instance_id, 0) {
-        Ok(()) => true,
-        Err(error) => {
-            eprintln!("Failed to start prompt button WebContent recovery: {error}");
-            false
-        }
+    let visual_health = app.state::<visual_liveness::PromptButtonVisualHealthState>();
+    if !visual_health.accepts_termination_event() {
+        return true;
     }
+    visual_health.mark_unresponsive();
+    record_visual_liveness_event(app, "webcontent_terminated");
+    let _ = crate::windows::hide_prompt_button_pair(app);
+    run_prompt_button_visual_monitor_once(app);
+    true
 }
 
 #[cfg(debug_assertions)]
@@ -2629,6 +2772,11 @@ fn apply_prompt_button_visibility(
 ) -> PromptButtonVisibilityOutcome {
     visibility_state.set(visible);
 
+    if visible {
+        app.state::<visual_liveness::PromptButtonVisualHealthState>()
+            .interrupt_backoff();
+    }
+
     let runtime_result = if visible {
         let position = prompt_button_position_cmd(app.clone()).ok().flatten();
         let (x, y) = position
@@ -2640,6 +2788,9 @@ fn apply_prompt_button_visibility(
     };
     let persistence_result = settings_state.patch_bool(&["floatingButton", "visible"], visible);
     let _ = app.emit("prompt-button-visibility-changed", visible);
+    if visible {
+        run_prompt_button_visual_monitor_once(app);
+    }
 
     let error = match (&runtime_result, &persistence_result) {
         (Err(runtime), Err(persist)) => Some(format!("{runtime}; {persist}")),
@@ -2804,9 +2955,7 @@ pub fn run() {
             if is_prompt_button_webview(webview.label())
                 && payload.event() == tauri::webview::PageLoadEvent::Started
             {
-                if let Some(window) = webview.app_handle().get_webview_window(webview.label()) {
-                    let _ = window.hide();
-                }
+                let _ = crate::windows::hide_prompt_button_pair(webview.app_handle());
             }
         });
 
@@ -2849,6 +2998,8 @@ pub fn run() {
             write_settings_text,
             set_prompt_button_visibility,
             set_prompt_button_renderer_ready,
+            ack_prompt_button_visual_probe,
+            set_prompt_button_interaction,
             #[cfg(debug_assertions)]
             calico_probe::record_calico_surface_probe,
             #[cfg(debug_assertions)]
@@ -2871,8 +3022,29 @@ pub fn run() {
             app.manage(settings_state);
             app.manage(visibility_state);
             app.manage(PromptButtonRendererState::default());
+            app.manage(visual_liveness::PromptButtonVisualHealthState::default());
+            let visual_logger = app
+                .path()
+                .app_log_dir()
+                .ok()
+                .and_then(|path| visual_liveness_log::VisualLivenessLogger::start(path).ok())
+                .unwrap_or_default();
+            app.manage(visual_logger);
             app.manage(PromptButtonRecoveryUrlState::default());
             app.manage(crate::windows::PopoverModeRequestState::default());
+
+            let autosend_health_app = app.handle().clone();
+            app.listen("prompt-autosend-activity", move |event| {
+                #[derive(serde::Deserialize)]
+                struct ActivityPayload {
+                    active: bool,
+                }
+                if let Ok(payload) = serde_json::from_str::<ActivityPayload>(event.payload()) {
+                    autosend_health_app
+                        .state::<visual_liveness::PromptButtonVisualHealthState>()
+                        .set_autosend_active(payload.active);
+                }
+            });
 
             setup_menu_bar_app(app.handle())?;
             if let Err(error) = crate::windows::prewarm_prompt_popover(app.handle()) {
@@ -2897,36 +3069,11 @@ pub fn run() {
 
             let monitor_app = app.handle().clone();
             std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_secs(15));
-
-                let visibility = monitor_app.state::<PromptButtonVisibilityState>();
-                let expected_visible = visibility.desired_visible();
-                let requested_generation = visibility.generation();
-                let button = monitor_app.get_webview_window(crate::windows::BUTTON_WINDOW_LABEL);
-                let renderer_ready = monitor_app.state::<PromptButtonRendererState>().is_ready();
-                let action = prompt_button_ensure_action(
-                    expected_visible,
-                    button.is_some(),
-                    button
-                        .as_ref()
-                        .and_then(|window| window.is_visible().ok())
-                        .unwrap_or(false),
-                    renderer_ready,
-                );
-                if action == PromptButtonEnsureAction::None {
-                    continue;
-                }
-
-                let ensure_app = monitor_app.clone();
-                let _ = monitor_app.run_on_main_thread(move || {
-                    let visibility = ensure_app.state::<PromptButtonVisibilityState>();
-                    if !visibility.may_show(requested_generation) {
-                        return;
-                    }
-                    let settings_state = ensure_app.state::<SettingsFileState>();
-                    let (x, y) = startup_prompt_button_position(settings_state.inner());
-                    let _ = show_prompt_button(x, y, ensure_app.clone());
-                });
+                let delay = monitor_app
+                    .state::<visual_liveness::PromptButtonVisualHealthState>()
+                    .next_monitor_delay();
+                std::thread::sleep(delay);
+                run_prompt_button_visual_monitor_once(&monitor_app);
             });
             Ok(())
         })
@@ -3063,14 +3210,6 @@ mod prompt_button_renderer_tests {
         assert_eq!(recovered.path(), "/overlay.html");
         assert_eq!(recovered.query(), Some("rendererInstanceId=7"));
         assert!(prompt_button_recovery_url(Err("unavailable".into()), None, 7).is_err());
-    }
-
-    #[test]
-    fn termination_recovery_has_three_bounded_attempts() {
-        assert_eq!(prompt_button_termination_retry_delay(0), Some(0));
-        assert_eq!(prompt_button_termination_retry_delay(1), Some(100));
-        assert_eq!(prompt_button_termination_retry_delay(2), Some(400));
-        assert_eq!(prompt_button_termination_retry_delay(3), None);
     }
 
     #[test]
@@ -3430,9 +3569,15 @@ mod last_input_target_tests {
         };
 
         assert!(state.set_window_if_current(11, first.clone()));
-        assert_eq!(state.captured_identity().unwrap().window.as_ref(), Some(&first));
+        assert_eq!(
+            state.captured_identity().unwrap().window.as_ref(),
+            Some(&first)
+        );
         assert!(state.set_window_if_current(11, second));
-        assert_eq!(state.captured_identity().unwrap().window.as_ref(), Some(&first));
+        assert_eq!(
+            state.captured_identity().unwrap().window.as_ref(),
+            Some(&first)
+        );
     }
 
     #[test]
