@@ -818,11 +818,6 @@ pub(crate) fn destroy_prompt_button_pair<R: tauri::Runtime>(
     Ok(())
 }
 
-pub(crate) fn prompt_button_pair_is_absent<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool {
-    app.get_webview_window(BUTTON_WINDOW_LABEL).is_none()
-        && app.get_webview_window(BUTTON_INPUT_WINDOW_LABEL).is_none()
-}
-
 fn build_prompt_button_input_window(
     app: &tauri::AppHandle,
     x: f64,
@@ -891,15 +886,24 @@ pub(crate) fn show_ready_prompt_button_window(app: &tauri::AppHandle) -> Result<
         position.y as f64 / scale,
     );
     let input = ensure_prompt_button_input_window(app, x, y)?;
-    if BUTTON_WINDOW_TRANSPARENT {
-        crate::macos_panels::configure_transparent_webview_window(&window)?;
-        crate::macos_panels::configure_transparent_webview_window(&input)?;
+    // Re-check user visibility and health immediately before the atomic presentation
+    // so a concurrent disable cannot be raced into showing the pair.
+    if app
+        .try_state::<crate::PromptButtonVisibilityState>()
+        .is_some_and(|state| !state.desired_visible())
+    {
+        return Ok(());
     }
-    show_non_activating_overlay_window(&window)?;
+    if app
+        .try_state::<crate::visual_liveness::PromptButtonVisualHealthState>()
+        .is_some_and(|state| !state.may_present_current())
+    {
+        return Ok(());
+    }
+    crate::macos_panels::present_prompt_button_pair(app, &window, &input)?;
     window
         .set_ignore_cursor_events(true)
         .map_err(|e| e.to_string())?;
-    show_non_activating_overlay_window(&input)?;
     input
         .set_ignore_cursor_events(false)
         .map_err(|e| e.to_string())?;
@@ -2044,5 +2048,78 @@ mod tests {
             Err(tokio::sync::oneshot::error::TryRecvError::Closed)
         );
         assert!(!state.acknowledge(request_id, "popover"));
+    }
+
+    #[test]
+    fn ready_button_show_rechecks_gates_and_presents_the_pair_atomically() {
+        let source = include_str!("windows.rs");
+        let start = source
+            .find("pub(crate) fn show_ready_prompt_button_window")
+            .expect("show_ready_prompt_button_window should exist");
+        let end = source[start..]
+            .find("#[tauri::command]\npub fn show_prompt_button")
+            .expect("show_prompt_button should follow show_ready_prompt_button_window");
+        let body = &source[start..start + end];
+
+        // Uses the single main-thread pair transaction instead of separate shows.
+        assert!(body.contains("present_prompt_button_pair(app, &window, &input)?"));
+        assert!(!body.contains("show_non_activating_overlay_window(&window)?"));
+        // Re-checks user visibility and health immediately before presenting.
+        assert!(body.contains("desired_visible()"));
+        assert!(body.contains("may_present_current()"));
+        // Visual stays click-through while input remains interactive.
+        let visual_ignore = body
+            .find("set_ignore_cursor_events(true)")
+            .expect("visual ignores cursor");
+        let input_ignore = body
+            .find("set_ignore_cursor_events(false)")
+            .expect("input accepts cursor");
+        assert!(visual_ignore < input_ignore);
+        // Never activates the process or makes the overlay key.
+        assert!(!body.contains("makeKeyAndOrderFront"));
+        assert!(!body.contains("activateIgnoringOtherApps"));
+    }
+
+    #[test]
+    fn hide_prompt_button_pair_hides_input_before_visual() {
+        let source = include_str!("windows.rs");
+        let start = source
+            .find("pub(crate) fn hide_prompt_button_pair")
+            .expect("hide_prompt_button_pair should exist");
+        let end = source[start..]
+            .find("#[tauri::command]")
+            .expect("a command should follow hide_prompt_button_pair");
+        let body = &source[start..start + end];
+
+        let input_hide = body
+            .find("BUTTON_INPUT_WINDOW_LABEL")
+            .expect("input hidden");
+        let visual_hide = body.find("BUTTON_WINDOW_LABEL").expect("visual hidden");
+        assert!(input_hide < visual_hide);
+    }
+
+    #[test]
+    fn prompt_button_pair_build_rolls_back_every_created_label() {
+        let source = include_str!("windows.rs");
+        let start = source
+            .find("fn build_prompt_button_window")
+            .expect("prompt button builder should exist");
+        let end = source[start..]
+            .find("fn build_prompt_button_input_window")
+            .expect("input builder should follow the visual builder");
+        let body = &source[start..start + end];
+
+        // Candidate construction commits only after both halves succeed.
+        assert!(body.contains("visual_health.commit_pair(renderer_instance_id);"));
+        // Failure tears down every created label and records the failure.
+        assert!(body.contains("window.destroy()"));
+        assert!(body.contains("input.destroy()"));
+        assert!(body.contains("visual_health.record_recovery_failure();"));
+        // Rollback precedes the commit.
+        let rollback = body
+            .find("if let Err(error) = pair_result")
+            .expect("rollback branch");
+        let commit = body.find("visual_health.commit_pair").expect("commit");
+        assert!(rollback < commit);
     }
 }

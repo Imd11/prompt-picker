@@ -542,11 +542,43 @@ fn count_visible_snapshot_pixels(image: &NSImage) -> Result<u64, String> {
     } else {
         samples - 1
     };
+    let bytes = unsafe { std::slice::from_raw_parts(data, bytes_per_row * height) };
+    Ok(count_visible_alpha_pixels_in_central_roi(
+        bytes,
+        width,
+        height,
+        samples,
+        bytes_per_row,
+        alpha_index,
+    ))
+}
+
+/// Counts pixels with alpha > 8 inside the central 27%–73% region (both axes).
+///
+/// The ROI deliberately excludes the outer ~27% margin on every side so that a
+/// status bubble rendered near an edge/corner cannot contribute to the "cat is
+/// alive" signal; only the cat's body occupies the centre. Alpha > 8 ignores
+/// anti-aliasing fringe on an otherwise transparent overlay.
+///
+/// This is pure byte math (no AppKit) so the ROI/threshold logic is unit testable
+/// on every platform; the native snapshot path decodes the image and feeds the
+/// bytes in.
+#[cfg(target_os = "macos")]
+fn count_visible_alpha_pixels_in_central_roi(
+    bytes: &[u8],
+    width: usize,
+    height: usize,
+    samples: usize,
+    bytes_per_row: usize,
+    alpha_index: usize,
+) -> u64 {
+    if width == 0 || height == 0 || samples < 2 || bytes_per_row == 0 {
+        return 0;
+    }
     let min_x = width * 27 / 100;
     let max_x = width * 73 / 100;
     let min_y = height * 27 / 100;
     let max_y = height * 73 / 100;
-    let bytes = unsafe { std::slice::from_raw_parts(data, bytes_per_row * height) };
     let mut visible = 0u64;
     for y in min_y..max_y {
         for x in min_x..max_x {
@@ -556,7 +588,7 @@ fn count_visible_snapshot_pixels(image: &NSImage) -> Result<u64, String> {
             }
         }
     }
-    Ok(visible)
+    visible
 }
 
 #[cfg(target_os = "macos")]
@@ -589,6 +621,64 @@ fn configure_transparent_webview_window_on_main_thread(
         .map_err(|e| e.to_string())
 }
 
+#[cfg(target_os = "macos")]
+pub fn present_prompt_button_pair(
+    app: &tauri::AppHandle,
+    visual: &tauri::WebviewWindow,
+    input: &tauri::WebviewWindow,
+) -> Result<(), String> {
+    let visual = visual.clone();
+    let input = input.clone();
+    run_on_main_thread_sync(app, move || {
+        present_prompt_button_pair_on_main_thread(&visual, &input)
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn present_prompt_button_pair_on_main_thread(
+    visual: &tauri::WebviewWindow,
+    input: &tauri::WebviewWindow,
+) -> Result<(), String> {
+    // Configure both panels before either is shown so the pair can never be observed
+    // half-configured. Neither call activates the process or makes it key.
+    configure_transparent_webview_window_on_main_thread(visual)?;
+    configure_transparent_webview_window_on_main_thread(input)?;
+    configure_non_activating_panel_on_main_thread(visual)?;
+    configure_non_activating_panel_on_main_thread(input)?;
+
+    // Present the visual panel first and confirm it is actually on screen before the
+    // interactive input panel appears; there is no asynchronous gap between the two.
+    show_overlay_on_main_thread(visual)?;
+    show_overlay_on_main_thread(input)
+}
+
+#[cfg(target_os = "macos")]
+fn show_overlay_on_main_thread(window: &tauri::WebviewWindow) -> Result<(), String> {
+    let ns_window_ptr = window.ns_window().map_err(|error| error.to_string())?;
+    if ns_window_ptr.is_null() {
+        return Err("ns_window returned null".to_string());
+    }
+    unsafe {
+        let ns_window = &*(ns_window_ptr.cast::<NSWindow>());
+        ns_window.orderFrontRegardless();
+        let visible: Bool = objc2::msg_send![ns_window, isVisible];
+        visible
+            .as_bool()
+            .then_some(())
+            .ok_or_else(|| "Overlay window did not become visible.".to_string())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn present_prompt_button_pair(
+    _app: &tauri::AppHandle,
+    visual: &tauri::WebviewWindow,
+    input: &tauri::WebviewWindow,
+) -> Result<(), String> {
+    visual.show().map_err(|error| error.to_string())?;
+    input.show().map_err(|error| error.to_string())
+}
+
 #[cfg(not(target_os = "macos"))]
 pub fn activate_main_window(_window: &tauri::WebviewWindow) -> Result<(), String> {
     Ok(())
@@ -607,6 +697,83 @@ pub fn configure_transparent_webview_window(_window: &tauri::WebviewWindow) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build a width×height RGBA buffer (alpha last) whose per-pixel alpha is
+    /// chosen by `alpha_at(x, y)`; RGB is opaque white so only alpha governs the
+    /// ROI count.
+    #[cfg(target_os = "macos")]
+    fn rgba_buffer(width: usize, height: usize, alpha_at: impl Fn(usize, usize) -> u8) -> Vec<u8> {
+        let mut bytes = vec![0u8; width * height * 4];
+        for y in 0..height {
+            for x in 0..width {
+                let offset = (y * width + x) * 4;
+                bytes[offset] = 255;
+                bytes[offset + 1] = 255;
+                bytes[offset + 2] = 255;
+                bytes[offset + 3] = alpha_at(x, y);
+            }
+        }
+        bytes
+    }
+
+    #[cfg(target_os = "macos")]
+    fn central_opaque_count(bytes: &[u8], width: usize, height: usize) -> u64 {
+        count_visible_alpha_pixels_in_central_roi(bytes, width, height, 4, width * 4, 3)
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn roi_counts_only_the_central_region_of_a_fully_opaque_image() {
+        // A fully opaque 100×100 frame: only the central 27%–73% box (46×46) counts.
+        let bytes = rgba_buffer(100, 100, |_, _| 255);
+        assert_eq!(central_opaque_count(&bytes, 100, 100), 46 * 46);
+        // And that is far above the alive threshold, while a blank frame is zero.
+        assert!(46 * 46 > crate::visual_liveness::MIN_VISIBLE_ALPHA_PIXELS);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn roi_ignores_an_opaque_corner_status_bubble() {
+        // Opaque only in the four corners (outside 27%–73% on both axes): the ROI
+        // must contribute nothing, so a status bubble cannot fake "alive".
+        let bytes = rgba_buffer(100, 100, |x, y| {
+            let in_corner = (x < 20 || x >= 80) && (y < 20 || y >= 80);
+            if in_corner {
+                255
+            } else {
+                0
+            }
+        });
+        assert_eq!(central_opaque_count(&bytes, 100, 100), 0);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn blank_frame_yields_no_visible_pixels() {
+        let bytes = rgba_buffer(100, 100, |_, _| 0);
+        assert_eq!(central_opaque_count(&bytes, 100, 100), 0);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn alpha_threshold_rejects_fringe_at_eight_and_accepts_above() {
+        // A single central pixel at alpha 8 is fringe → ignored; at 9 → counted.
+        let fringe = rgba_buffer(100, 100, |x, y| if (x, y) == (50, 50) { 8 } else { 0 });
+        assert_eq!(central_opaque_count(&fringe, 100, 100), 0);
+        let solid = rgba_buffer(100, 100, |x, y| if (x, y) == (50, 50) { 9 } else { 0 });
+        assert_eq!(central_opaque_count(&solid, 100, 100), 1);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn alpha_first_pixel_layout_is_supported() {
+        // ARGB-style layout: alpha at index 0. A central opaque pixel still counts.
+        let mut bytes = vec![0u8; 100 * 100 * 4];
+        let offset = (50 * 100 + 50) * 4;
+        bytes[offset] = 255; // alpha first
+        let count = count_visible_alpha_pixels_in_central_roi(&bytes, 100, 100, 4, 100 * 4, 0);
+        assert_eq!(count, 1);
+    }
 
     #[test]
     fn panel_class_action_keeps_existing_native_panel() {
@@ -765,5 +932,62 @@ mod tests {
         assert!(source.contains("configure_transparent_webview_window_on_main_thread"));
         assert!(source.matches("run_on_main_thread_sync").count() >= 3);
         assert!(source.matches("MainThreadMarker::new()").count() >= 3);
+    }
+
+    #[test]
+    fn prompt_button_pair_is_configured_and_presented_as_one_non_activating_transaction() {
+        let source = include_str!("macos_panels.rs");
+        let start = source
+            .find("pub fn present_prompt_button_pair")
+            .expect("pair presentation helper should exist");
+        let end = source[start..]
+            .find("#[cfg(not(target_os = \"macos\"))]")
+            .expect("non-macos stub should follow the macos pair helpers");
+        let block = &source[start..start + end];
+
+        // Dispatched as a single main-thread transaction.
+        assert!(block.contains("run_on_main_thread_sync"));
+        assert!(block.contains("present_prompt_button_pair_on_main_thread"));
+        // Both panels are configured (never-key + transparency) before any show.
+        assert!(
+            block
+                .matches("configure_non_activating_panel_on_main_thread")
+                .count()
+                >= 2
+        );
+        assert!(
+            block
+                .matches("configure_transparent_webview_window_on_main_thread")
+                .count()
+                >= 2
+        );
+        // Visual is shown and verified before the interactive input panel.
+        let visual_show = block
+            .find("show_overlay_on_main_thread(visual)")
+            .expect("visual shown first");
+        let input_show = block
+            .find("show_overlay_on_main_thread(input)")
+            .expect("input shown second");
+        assert!(visual_show < input_show);
+        // Presentation is non-activating and never makes the process key.
+        assert!(!block.contains("makeKeyAndOrderFront"));
+        assert!(!block.contains("activateIgnoringOtherApps"));
+        assert!(!block.contains("makeKeyWindow"));
+    }
+
+    #[test]
+    fn pair_show_verifies_native_visibility_after_ordering_front() {
+        let source = include_str!("macos_panels.rs");
+        let start = source
+            .find("fn show_overlay_on_main_thread")
+            .expect("overlay show helper should exist");
+        let end = source[start..]
+            .find("#[cfg(not(target_os = \"macos\"))]")
+            .expect("non-macos stubs should follow");
+        let helper = &source[start..start + end];
+
+        assert!(helper.contains("orderFrontRegardless"));
+        assert!(helper.contains("isVisible"));
+        assert!(helper.find("orderFrontRegardless").unwrap() < helper.find("isVisible").unwrap());
     }
 }

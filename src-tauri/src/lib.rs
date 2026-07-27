@@ -28,6 +28,7 @@ pub use windows::{
     show_prompt_button_controls_from_button, show_prompt_popover, show_prompt_popover_from_button,
     toggle_prompt_popover_from_button,
 };
+mod macos_lifecycle;
 mod macos_panels;
 pub use macos_panels::{activate_main_window, configure_non_activating_panel};
 mod prompt_files;
@@ -1744,7 +1745,11 @@ fn ack_prompt_button_visual_probe(
     if acknowledgement.accepted && acknowledgement.visually_alive {
         #[cfg(target_os = "macos")]
         {
-            if native_visual_snapshot_spike_enabled() {
+            // A native WKWebView snapshot captures the screen and is comparatively
+            // expensive, so never run one mid-interaction (click / drag / popover
+            // transition / autosend). While a lease is active we fall through to
+            // the canvas-pixel confirmation the renderer already provided.
+            if native_visual_snapshot_spike_enabled() && !visual_health.interaction_active() {
                 if let Some(window) = app.get_webview_window(crate::windows::BUTTON_WINDOW_LABEL) {
                     let snapshot_app = app.clone();
                     let request = crate::macos_panels::request_calico_webview_snapshot(
@@ -1803,13 +1808,22 @@ fn native_visual_snapshot_spike_enabled() -> bool {
     std::env::var("SLEEPY_CAT_VISUAL_SNAPSHOT_SPIKE").as_deref() == Ok("1")
 }
 
-fn record_visual_liveness_event(app: &tauri::AppHandle, event: &'static str) {
+pub(crate) fn record_visual_liveness_event(app: &tauri::AppHandle, event: &'static str) {
     let Some(health) = app.try_state::<visual_liveness::PromptButtonVisualHealthState>() else {
         return;
     };
     let (instance, generation) = health.diagnostic_identity();
+    let stage = health.stage();
+    let probe_ms = health.last_probe_duration_ms();
     if let Some(logger) = app.try_state::<visual_liveness_log::VisualLivenessLogger>() {
-        logger.record(event, health.stage().as_str(), instance, generation);
+        logger.record(
+            event,
+            stage.as_str(),
+            stage.recovery_level(),
+            instance,
+            generation,
+            probe_ms,
+        );
     }
 }
 
@@ -1927,45 +1941,79 @@ fn execute_prompt_button_visual_action(
         }
         visual_liveness::VisualMonitorAction::Rebuild => {
             record_visual_liveness_event(app, "rebuild_requested");
-            let visual_health = app.state::<visual_liveness::PromptButtonVisualHealthState>();
-            let generation = visual_health.begin_rebuild_attempt();
-            let requested_visibility_generation =
-                app.state::<PromptButtonVisibilityState>().generation();
-            let position = visual_health.latest_position().unwrap_or_else(|| {
-                let settings = app.state::<SettingsFileState>();
-                startup_prompt_button_position(settings.inner())
-            });
-            let rebuild_app = app.clone();
+            // Begin a controlled, phased rebuild. The monitor loop advances it one
+            // non-blocking transition per tick (hide -> destroy -> wait for the
+            // registry to clear -> build -> await ready -> verify -> show), so the
+            // replacement pair is never created while the old labels still exist.
+            app.state::<visual_liveness::PromptButtonVisualHealthState>()
+                .begin_rebuild_attempt();
+        }
+    }
+}
+
+fn execute_prompt_button_rebuild_step(app: &tauri::AppHandle, step: visual_liveness::RebuildStep) {
+    match step {
+        visual_liveness::RebuildStep::Wait | visual_liveness::RebuildStep::Finished => {}
+        visual_liveness::RebuildStep::Failed(failure) => {
+            record_visual_liveness_event(app, failure.as_str());
+            app.state::<visual_liveness::PromptButtonVisualHealthState>()
+                .record_recovery_failure();
+        }
+        visual_liveness::RebuildStep::Run(phase) => {
+            record_visual_liveness_event(app, phase.as_str());
+            let step_app = app.clone();
             let queue_result = app.run_on_main_thread(move || {
-                let visibility = rebuild_app.state::<PromptButtonVisibilityState>();
-                let health = rebuild_app.state::<visual_liveness::PromptButtonVisualHealthState>();
-                if !visibility.may_show(requested_visibility_generation)
-                    || !health.generation_is_current(generation)
-                {
+                let visibility = step_app.state::<PromptButtonVisibilityState>();
+                let health = step_app.state::<visual_liveness::PromptButtonVisualHealthState>();
+                // Re-check the user's intent right before every side effect so a
+                // disable that raced the queue cancels the phase (and never shows
+                // the cat the user hid).
+                if !visibility.desired_visible() {
+                    health.abort_rebuild();
+                    let _ = crate::windows::hide_prompt_button_pair(&step_app);
                     return;
                 }
-                if let Err(error) = crate::windows::destroy_prompt_button_pair(&rebuild_app) {
-                    eprintln!("Failed to destroy prompt button pair: {error}");
-                    health.record_recovery_failure();
-                    return;
-                }
-                if !crate::windows::prompt_button_pair_is_absent(&rebuild_app) {
-                    health.record_recovery_failure();
-                    return;
-                }
-                if !visibility.may_show(requested_visibility_generation)
-                    || !health.generation_is_current(generation)
-                {
-                    return;
-                }
-                if let Err(error) =
-                    crate::windows::build_prompt_button_window(&rebuild_app, position.0, position.1)
-                {
-                    eprintln!("Failed to rebuild prompt button pair: {error}");
+                match phase {
+                    visual_liveness::RebuildPhase::HideOld => {
+                        let _ = crate::windows::hide_prompt_button_pair(&step_app);
+                    }
+                    visual_liveness::RebuildPhase::DestroyOld => {
+                        if let Err(error) = crate::windows::destroy_prompt_button_pair(&step_app) {
+                            eprintln!("Failed to destroy prompt button pair: {error}");
+                            // The bounded registry wait that follows will observe the
+                            // labels still present and fail the attempt into backoff.
+                        }
+                    }
+                    visual_liveness::RebuildPhase::BuildCandidate => {
+                        let position = health.rebuild_position().unwrap_or_else(|| {
+                            startup_prompt_button_position(
+                                step_app.state::<SettingsFileState>().inner(),
+                            )
+                        });
+                        if let Err(error) = crate::windows::build_prompt_button_window(
+                            &step_app, position.0, position.1,
+                        ) {
+                            eprintln!("Failed to rebuild prompt button pair: {error}");
+                            // build_prompt_button_window records the failure itself,
+                            // which clears the phased rebuild and enters backoff.
+                        }
+                    }
+                    visual_liveness::RebuildPhase::Show => {
+                        if let Err(error) =
+                            crate::windows::show_ready_prompt_button_window(&step_app)
+                        {
+                            eprintln!("Failed to present rebuilt prompt button pair: {error}");
+                        }
+                    }
+                    // Pure condition phases are resolved inside the health controller
+                    // and never produce a Run side effect.
+                    visual_liveness::RebuildPhase::WaitForRegistryRemoval
+                    | visual_liveness::RebuildPhase::AwaitReady
+                    | visual_liveness::RebuildPhase::Verify => {}
                 }
             });
             if let Err(error) = queue_result {
-                eprintln!("Failed to queue prompt button pair rebuild: {error}");
+                eprintln!("Failed to queue prompt button rebuild phase: {error}");
                 app.state::<visual_liveness::PromptButtonVisualHealthState>()
                     .record_recovery_failure();
             }
@@ -1975,17 +2023,36 @@ fn execute_prompt_button_visual_action(
 
 fn run_prompt_button_visual_monitor_once(app: &tauri::AppHandle) {
     let visibility = app.state::<PromptButtonVisibilityState>();
+    let visual_present = app
+        .get_webview_window(crate::windows::BUTTON_WINDOW_LABEL)
+        .is_some();
+    let input_present = app
+        .get_webview_window(crate::windows::BUTTON_INPUT_WINDOW_LABEL)
+        .is_some();
+    let health = app.state::<visual_liveness::PromptButtonVisualHealthState>();
+
+    // A phased rebuild owns the loop: advance exactly one non-blocking transition
+    // this tick instead of re-planning from scratch.
+    if health.rebuild_in_progress() {
+        if !visibility.desired_visible() {
+            // The user hid the cat mid-rebuild; stop and never revive it.
+            health.abort_rebuild();
+            let _ = crate::windows::hide_prompt_button_pair(app);
+            return;
+        }
+        let renderer_ready = app.state::<PromptButtonRendererState>().is_ready();
+        let step = health.advance_rebuild(visual_present, input_present, renderer_ready);
+        execute_prompt_button_rebuild_step(app, step);
+        return;
+    }
+
     let renderer_ready = app.state::<PromptButtonRendererState>().is_ready();
-    let action = app
-        .state::<visual_liveness::PromptButtonVisualHealthState>()
-        .plan_monitor(
-            visibility.desired_visible(),
-            renderer_ready,
-            app.get_webview_window(crate::windows::BUTTON_WINDOW_LABEL)
-                .is_some(),
-            app.get_webview_window(crate::windows::BUTTON_INPUT_WINDOW_LABEL)
-                .is_some(),
-        );
+    let action = health.plan_monitor(
+        visibility.desired_visible(),
+        renderer_ready,
+        visual_present,
+        input_present,
+    );
     execute_prompt_button_visual_action(app, action);
 }
 
@@ -3032,6 +3099,9 @@ pub fn run() {
             app.manage(visual_logger);
             app.manage(PromptButtonRecoveryUrlState::default());
             app.manage(crate::windows::PopoverModeRequestState::default());
+            // Register macOS sleep/wake/memory-pressure observers once, for the
+            // app's lifetime (never per-rebuild). No-op on other platforms.
+            app.manage(macos_lifecycle::install(app.handle()));
 
             let autosend_health_app = app.handle().clone();
             app.listen("prompt-autosend-activity", move |event| {
