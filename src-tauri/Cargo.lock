@@ -2554,6 +2554,7 @@ dependencies = [
  "block2",
  "core-foundation",
  "core-graphics",
+ "dispatch2",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
