@@ -1,6 +1,6 @@
 [package]
 name = "prompt-picker"
-version = "1.1.1"
+version = "1.2.0"
 description = "Sleepy Cat local-first personal prompt library and launcher"
 authors = [""]
 license = "MIT"
