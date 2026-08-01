@@ -337,6 +337,12 @@ fn should_use_transparent_popover_window(mode: Option<&str>) -> bool {
 
 fn emit_popover_opened(app: &tauri::AppHandle, mode: &str) {
     let _ = app.emit_to(POPOVER_WINDOW_LABEL, "prompt-popover-opened", mode);
+    #[cfg(target_os = "macos")]
+    if mode == "popover" {
+        if let Some(window) = app.get_webview_window(POPOVER_WINDOW_LABEL) {
+            let _ = crate::macos_panels::emit_current_prompt_popover_pointer_position(&window);
+        }
+    }
 }
 
 fn emit_popover_dismissed(app: &tauri::AppHandle) {
@@ -1896,6 +1902,26 @@ mod tests {
         assert!(reuse_source.contains("set_position(logical_position(window_x, window_y))"));
         assert!(reuse_source.contains("show_non_activating_overlay_window(&window)?"));
         assert!(reuse_source.contains("emit_popover_opened(app, mode)"));
+    }
+
+    #[test]
+    fn popover_open_announcement_is_followed_by_a_current_pointer_snapshot() {
+        let source = include_str!("windows.rs");
+        let start = source
+            .find("fn emit_popover_opened")
+            .expect("popover opened helper should exist");
+        let end = source[start..]
+            .find("fn emit_popover_dismissed")
+            .expect("popover dismissed helper should follow opened helper");
+        let block = &source[start..start + end];
+
+        let opened = block
+            .find("prompt-popover-opened")
+            .expect("opened event should be emitted");
+        let pointer = block
+            .find("emit_current_prompt_popover_pointer_position")
+            .expect("current pointer snapshot should be emitted");
+        assert!(opened < pointer);
     }
 
     #[test]

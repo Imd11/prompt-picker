@@ -111,6 +111,56 @@ fn pointer_position_from_event(event: &NSEvent) -> Option<PromptPopoverPointerPo
 }
 
 #[cfg(target_os = "macos")]
+fn current_prompt_popover_pointer_position(
+    window: &tauri::WebviewWindow,
+) -> Result<PromptPopoverPointerPosition, String> {
+    let _mtm = objc2::MainThreadMarker::new()
+        .ok_or_else(|| "Prompt popover pointer snapshot must run on the main thread".to_string())?;
+    let ns_window_ptr = window.ns_window().map_err(|error| error.to_string())?;
+    if ns_window_ptr.is_null() {
+        return Err("ns_window returned null".to_string());
+    }
+
+    let ns_window = unsafe { &*(ns_window_ptr.cast::<NSWindow>()) };
+    let content_view = ns_window
+        .contentView()
+        .ok_or_else(|| "Prompt popover has no content view".to_string())?;
+    let bounds = content_view.bounds();
+    let point = content_view.convertPoint_fromView(
+        ns_window.mouseLocationOutsideOfEventStream(),
+        None,
+    );
+    let local_x = point.x - bounds.origin.x;
+    let local_y = point.y - bounds.origin.y;
+    let inside = local_x >= 0.0
+        && local_y >= 0.0
+        && local_x < bounds.size.width
+        && local_y < bounds.size.height;
+    let (x, y) = top_left_pointer_position(
+        local_x,
+        local_y,
+        bounds.size.height,
+        content_view.isFlipped(),
+    );
+
+    Ok(PromptPopoverPointerPosition { x, y, inside })
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn emit_current_prompt_popover_pointer_position(
+    window: &tauri::WebviewWindow,
+) -> Result<(), String> {
+    let app = window.app_handle().clone();
+    let task_app = app.clone();
+    let task_window = window.clone();
+    let position = run_on_main_thread_sync(&task_app, move || {
+        current_prompt_popover_pointer_position(&task_window)
+    })?;
+    app.emit_to(PROMPT_POPOVER_LABEL, PROMPT_POPOVER_POINTER_EVENT, position)
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
 fn top_left_pointer_position(x: f64, y: f64, height: f64, is_flipped: bool) -> (f64, f64) {
     let top = if is_flipped { y } else { height - y };
     (x.max(0.0), top.max(0.0))

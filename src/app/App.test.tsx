@@ -582,12 +582,40 @@ describe("app", () => {
 
     try {
       await act(async () => {
+        await eventHandlers.get("prompt-popover-opened")?.({ payload: "popover" });
+      });
+      await act(async () => {
         await eventHandlers.get("prompt-popover-pointer-position")?.({
           payload: { x: 40, y: 80, inside: true },
         });
       });
 
       expect(option.classList.contains("is-hovered")).toBe(true);
+    } finally {
+      Reflect.deleteProperty(document, "elementFromPoint");
+    }
+  });
+
+  it("ignores late native pointer events after the prompt popover is dismissed", async () => {
+    currentWindowLabel = "prompt-popover";
+    window.history.pushState({}, "", "/?mode=popover");
+    await renderPromptPopover();
+    const option = screen.getByRole("option", { name: /Test Prompt/i });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn().mockReturnValue(option),
+    });
+
+    try {
+      await act(async () => {
+        await eventHandlers.get("prompt-popover-opened")?.({ payload: "popover" });
+        await eventHandlers.get("prompt-popover-dismissed")?.({ payload: undefined });
+        await eventHandlers.get("prompt-popover-pointer-position")?.({
+          payload: { x: 40, y: 80, inside: true },
+        });
+      });
+
+      expect(option.classList.contains("is-hovered")).toBe(false);
     } finally {
       Reflect.deleteProperty(document, "elementFromPoint");
     }

@@ -173,6 +173,40 @@ describe("PromptQuickList", () => {
     Reflect.deleteProperty(document, "elementFromPoint");
   });
 
+  it("realigns the highlight after scrolling under a stationary native pointer", () => {
+    const elementFromPoint = vi.fn<() => Element | null>().mockReturnValue(null);
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: elementFromPoint,
+    });
+    const { rerender } = renderQuickList();
+    const first = screen.getByRole("option", { name: /讨论方案/i });
+    const second = screen.getByRole("option", { name: /修复流程/i });
+    const zh = getMessages("zh-CN");
+
+    try {
+      elementFromPoint.mockReturnValue(first);
+      rerender(
+        <PromptQuickList
+          prompts={prompts}
+          messages={zh.quickList}
+          groupMeta={zh.manager.groupMeta}
+          onSelect={() => {}}
+          nativePointerPosition={{ x: 40, y: 80, inside: true }}
+        />
+      );
+      expect(first.classList.contains("is-hovered")).toBe(true);
+
+      elementFromPoint.mockReturnValue(second);
+      fireEvent.scroll(screen.getByRole("listbox", { name: "提示词" }));
+
+      expect(first.classList.contains("is-hovered")).toBe(false);
+      expect(second.classList.contains("is-hovered")).toBe(true);
+    } finally {
+      Reflect.deleteProperty(document, "elementFromPoint");
+    }
+  });
+
   it("clears stale pointer highlighting and focus when a reused popover resets", () => {
     const { rerender } = renderQuickList({ hoverResetKey: 0 });
     const option = screen.getByRole("option", { name: /讨论方案/i });

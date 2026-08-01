@@ -303,6 +303,7 @@ export function App({
   const storeRef = useRef(createPromptStore(promptStorageRef.current));
   const promptListRefreshingRef = useRef(false);
   const autosendInFlightRef = useRef(false);
+  const popoverSessionOpenRef = useRef(false);
   const t = getMessages(activeSettings.language);
   const applyPromptData = useCallback((data: PromptLibrarySnapshot) => {
     setPrompts(data.containers);
@@ -500,6 +501,9 @@ export function App({
       if (!active) return;
       const requestedMode = event.payload.mode;
       if (requestedMode !== "popover" && requestedMode !== "button-controls") return;
+      if (requestedMode !== "popover") {
+        popoverSessionOpenRef.current = false;
+      }
       setPendingPopoverModeRequest(event.payload);
       setMode(requestedMode);
     })
@@ -515,7 +519,7 @@ export function App({
       });
 
     listen<NativePopoverPointerPosition>("prompt-popover-pointer-position", (event) => {
-      if (!active) return;
+      if (!active || !popoverSessionOpenRef.current) return;
       setNativePopoverPointer(event.payload);
     })
       .then((unlisten) => {
@@ -530,7 +534,12 @@ export function App({
       });
 
     listen<string>("prompt-popover-opened", async (event) => {
-      if (!active || event.payload !== "popover") return;
+      if (!active) return;
+      if (event.payload !== "popover") {
+        popoverSessionOpenRef.current = false;
+        return;
+      }
+      popoverSessionOpenRef.current = true;
       setNativePopoverPointer(null);
       resetPromptHoverPreview();
       promptListRefreshingRef.current = true;
@@ -556,6 +565,7 @@ export function App({
 
     listen("prompt-popover-dismissed", () => {
       if (!active || currentWindowLabel() !== "prompt-popover") return;
+      popoverSessionOpenRef.current = false;
       setNativePopoverPointer(null);
       resetPromptHoverPreview();
     })
@@ -572,6 +582,7 @@ export function App({
 
     return () => {
       active = false;
+      popoverSessionOpenRef.current = false;
       disposers.forEach((dispose) => dispose());
     };
   }, [applyActiveSettings, reloadPromptData, resetPromptHoverPreview, windowLabel]);

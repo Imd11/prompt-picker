@@ -68,6 +68,7 @@ export function PromptQuickList({
   const listRef = useRef<HTMLDivElement | null>(null);
   const hoverPreviewTimerRef = useRef<number | null>(null);
   const hoverPreviewAnchorRef = useRef<HoverPreviewAnchor | null>(null);
+  const livePointerPositionRef = useRef<NativePopoverPointerPosition | null>(null);
   const hoveredPrompt = prompts.find((prompt) => prompt.id === hoverPreview?.promptId) ?? null;
 
   useEffect(() => {
@@ -77,6 +78,7 @@ export function PromptQuickList({
   }, []);
 
   useEffect(() => {
+    livePointerPositionRef.current = null;
     hidePromptHover();
     const focusedElement = document.activeElement;
     if (
@@ -89,14 +91,24 @@ export function PromptQuickList({
 
   useEffect(() => {
     if (!nativePointerPosition) return;
-    if (!nativePointerPosition.inside) {
+    livePointerPositionRef.current = nativePointerPosition.inside
+      ? nativePointerPosition
+      : null;
+    reconcilePointerPosition(nativePointerPosition);
+  }, [nativePointerPosition, prompts]);
+
+  function reconcilePointerPosition(
+    pointerPosition: NativePopoverPointerPosition,
+    showDelayedPreview = true
+  ) {
+    if (!pointerPosition.inside) {
       hidePromptHover();
       return;
     }
 
     const pointedElement = document.elementFromPoint?.(
-      nativePointerPosition.x,
-      nativePointerPosition.y
+      pointerPosition.x,
+      pointerPosition.y
     );
     const option = pointedElement?.closest<HTMLButtonElement>(".prompt-quick-item");
     if (!option || !listRef.current?.contains(option) || option.disabled) {
@@ -111,8 +123,10 @@ export function PromptQuickList({
     }
 
     setHoveredPromptId(prompt.id);
-    scheduleHoverPreview(prompt, option);
-  }, [nativePointerPosition, prompts]);
+    if (showDelayedPreview) {
+      scheduleHoverPreview(prompt, option);
+    }
+  }
 
   function clearHoverPreviewTimer() {
     if (hoverPreviewTimerRef.current !== null) {
@@ -215,6 +229,21 @@ export function PromptQuickList({
     hideHoverPreview();
   }
 
+  function leavePromptHover() {
+    livePointerPositionRef.current = null;
+    hidePromptHover();
+  }
+
+  function handleListScroll() {
+    hideHoverPreview();
+    const pointerPosition = livePointerPositionRef.current;
+    if (!pointerPosition) {
+      setHoveredPromptId(null);
+      return;
+    }
+    reconcilePointerPosition(pointerPosition, false);
+  }
+
   function selectPrompt(prompt: PromptContainer) {
     hidePromptHover();
     onSelect(prompt);
@@ -249,7 +278,7 @@ export function PromptQuickList({
         className="prompt-quick-list"
         role="listbox"
         aria-label={messages.ariaLabel}
-        onScroll={hidePromptHover}
+        onScroll={handleListScroll}
       >
         {prompts.length === 0 ? (
           <div className="prompt-quick-empty">
@@ -278,11 +307,16 @@ export function PromptQuickList({
               disabled={submittingPromptId === prompt.id}
               onPointerEnter={() => showPromptHover(prompt)}
               onPointerMove={(event) => {
+                livePointerPositionRef.current = {
+                  x: event.clientX,
+                  y: event.clientY,
+                  inside: true,
+                };
                 setHoveredPromptId(prompt.id);
                 scheduleHoverPreview(prompt, event.currentTarget);
               }}
-              onPointerLeave={hidePromptHover}
-              onPointerCancel={hidePromptHover}
+              onPointerLeave={leavePromptHover}
+              onPointerCancel={leavePromptHover}
               onFocus={() => reportGroupPreview(prompt)}
               onBlur={hideHoverPreview}
               onClick={() => selectPrompt(prompt)}
