@@ -38,6 +38,7 @@ vi.mock("motion/react", () => ({
       className,
       role,
       value,
+      layout,
       onPointerDown,
       onDragEnd,
       "data-reorder-id": reorderId,
@@ -46,6 +47,7 @@ vi.mock("motion/react", () => ({
       className?: string;
       role?: string;
       value?: string;
+      layout?: boolean | "position" | "size" | "preserve-aspect";
       onPointerDown?: HTMLAttributes<HTMLDivElement>["onPointerDown"];
       onDragEnd?: () => void;
       "data-reorder-id"?: string;
@@ -56,6 +58,7 @@ vi.mock("motion/react", () => ({
           className={className}
           role={role}
           data-reorder-id={reorderId}
+          data-layout={String(layout)}
           onPointerDown={onPointerDown}
         >
           {children}
@@ -148,6 +151,16 @@ describe("prompt manager controlled dragging", () => {
     fireEvent.pointerDown(screen.getByRole("button", { name: "下移 Code Review" }));
 
     expect(motionMocks.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("animates reordered positions without scaling prompt row dimensions", () => {
+    renderManager();
+
+    const rows = screen.getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    rows.forEach((row) => {
+      expect(row.getAttribute("data-layout")).toBe("position");
+    });
   });
 
   it("persists the final Motion order when dragging ends", async () => {

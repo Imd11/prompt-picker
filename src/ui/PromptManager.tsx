@@ -218,6 +218,7 @@ function PromptReorderRow({
       value={id}
       role="listitem"
       data-reorder-id={id}
+      layout="position"
       dragListener={false}
       dragControls={dragControls}
       dragMomentum={false}
