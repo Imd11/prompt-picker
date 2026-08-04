@@ -32,4 +32,22 @@ describe("prompt manager layout styles", () => {
     expect(hasDeclaration(".prompt-manager .prompt-item.is-dragging", "will-change: transform")).toBe(true);
     expect(hasDeclaration(".prompt-manager .prompt-item", "will-change: transform")).toBe(false);
   });
+
+  it("never creates a stacking context on plain press, so row menus stay clickable", () => {
+    // A :active rule with will-change traps the row's dropdown menu under later
+    // sibling rows mid-press; pointerup then lands on the wrong row and the
+    // menu option never receives its click. Guard against reintroducing it.
+    const commentFree = styles.replace(/\/\*[\s\S]*?\*\//g, "");
+    const ruleBlocks = Array.from(commentFree.matchAll(/([^{}]+)\{([^}]*)\}/g));
+    const offenders = ruleBlocks.filter((match) => {
+      const selectorList = match[1] ?? "";
+      const body = match[2] ?? "";
+      return (
+        selectorList.includes(".prompt-item") &&
+        selectorList.includes(":active") &&
+        body.includes("will-change")
+      );
+    });
+    expect(offenders).toEqual([]);
+  });
 });

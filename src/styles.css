@@ -1455,10 +1455,17 @@ button {
 .prompt-manager .prompt-item.is-dragging {
   z-index: 4;
   cursor: grabbing;
-  will-change: transform;
   background: var(--pp-surface);
   border: 1px solid var(--pp-border-strong);
   border-radius: var(--pp-radius-sm);
+}
+
+/* Keep will-change off :active: on a plain press it creates a stacking context
+   on the row, which traps the row's dropdown menu under later sibling rows and
+   steals the click (pointerdown hits the menu, pointerup hits the row below).
+   Only an actual drag needs the compositing hint. */
+.prompt-manager .prompt-item.is-dragging {
+  will-change: transform;
 }
 
 .prompt-manager .prompt-item.is-dragging .prompt-actions {
