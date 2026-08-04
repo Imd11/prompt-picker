@@ -1036,7 +1036,7 @@ describe("app", () => {
     });
   });
 
-  it("ignores a legacy prompt send behavior and uses the global setting", async () => {
+  it("honors a per-container paste_only override over the global setting", async () => {
     const { invoke } = await import("@tauri-apps/api/core");
     vi.mocked(invoke).mockImplementation(async (command: string) => {
       if (command === "paste_prompt_and_submit_to_last_target") {
@@ -1076,7 +1076,7 @@ describe("app", () => {
     await waitFor(() => {
       expect(vi.mocked(invoke)).toHaveBeenCalledWith(
         "paste_prompt_and_submit_to_last_target",
-        { body: "Paste body", submitKey: "enter" }
+        { body: "Paste body", submitKey: "none" }
       );
     });
     expect(emitMock).toHaveBeenCalledWith("prompt-autosend-status", {

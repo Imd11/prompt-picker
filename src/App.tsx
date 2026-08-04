@@ -3,7 +3,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { writeTextFile, readTextFile } from "@tauri-apps/plugin-fs";
-import type { PromptCategory, PromptContainer } from "./shared/promptTypes";
+import type { PromptCategory, PromptContainer, PromptSendBehavior } from "./shared/promptTypes";
 import { getPromptContainerBodies } from "./shared/promptTypes";
 import type { AppLanguage, PromptInsertionMode, Settings } from "./shared/settingsStore";
 import { createSettingsStore } from "./shared/settingsStore";
@@ -133,6 +133,18 @@ function submitKeyForMode(mode: PromptInsertionMode): NativeSubmitKey {
     default:
       return "enter";
   }
+}
+
+// Resolve the submit key for a click from the per-container override, falling
+// back to the global setting. `inherit`/undefined (and the unused
+// `paste_command_enter`) defer to global so existing data behaves unchanged.
+function resolveSendSubmitKey(
+  behavior: PromptSendBehavior | undefined,
+  globalMode: PromptInsertionMode
+): NativeSubmitKey {
+  if (behavior === "paste_only") return "none";
+  if (behavior === "paste_enter") return "enter";
+  return submitKeyForMode(globalMode);
 }
 
 function statusForAutosendOutcome(
@@ -602,7 +614,10 @@ export function App({
         await emitAutosendStatus("failed", t.autosend.genericFailed);
         return;
       }
-      const submitKey = submitKeyForMode(activeSettingsRef.current.promptInsertion.mode);
+      const submitKey = resolveSendSubmitKey(
+        prompt.sendBehavior,
+        activeSettingsRef.current.promptInsertion.mode
+      );
       const status = submitKey === "none"
         ? statusForAutosendOutcome(
           await pastePromptAndSubmitToLastTarget(

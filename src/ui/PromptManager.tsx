@@ -75,6 +75,7 @@ interface PromptManagerProps {
       title?: string;
       body?: string;
       type?: EditorMode;
+      sendBehavior?: PromptSendBehavior;
       prompts?: Array<{
         id?: string;
         title?: string;
@@ -248,6 +249,16 @@ function PromptKindBadge({ prompt, messages }: { prompt: PromptContainer; messag
       {messages.manager.groupMeta(count)}
     </span>
   );
+}
+
+function SendBehaviorBadge({ prompt, messages }: { prompt: PromptContainer; messages: Messages }) {
+  if (prompt.sendBehavior !== "paste_only" && prompt.sendBehavior !== "paste_enter") {
+    return null;
+  }
+  const label = prompt.sendBehavior === "paste_only"
+    ? messages.settings.pasteOnly
+    : messages.settings.pasteEnter;
+  return <span className="prompt-send-badge">{label}</span>;
 }
 
 export function PromptManager({
@@ -1031,6 +1042,7 @@ export function PromptManager({
                         <div className="prompt-title-row">
                           <strong>{prompt.title}</strong>
                           <PromptKindBadge prompt={prompt} messages={messages} />
+                          <SendBehaviorBadge prompt={prompt} messages={messages} />
                         </div>
                         <span className="prompt-preview-lines">
                           {getPromptContainerPreviewLines(prompt).map((line) => (
@@ -1085,6 +1097,36 @@ export function PromptManager({
                           </button>
                           {openMenuId === prompt.id ? (
                             <div className="prompt-action-menu" role="menu">
+                              <div className="prompt-action-menu-label" aria-hidden="true">
+                                {messages.settings.clickBehaviorField}
+                              </div>
+                              {(["inherit", "paste_only", "paste_enter"] as const).map((value) => {
+                                const selected = (prompt.sendBehavior ?? "inherit") === value;
+                                const label = value === "inherit"
+                                  ? messages.settings.followGlobal
+                                  : value === "paste_only"
+                                    ? messages.settings.pasteOnly
+                                    : messages.settings.pasteEnter;
+                                return (
+                                  <button
+                                    key={value}
+                                    className={`prompt-action-menu-option${selected ? " is-selected" : ""}`}
+                                    type="button"
+                                    role="menuitemradio"
+                                    aria-checked={selected}
+                                    onClick={() => {
+                                      setOpenMenuId(null);
+                                      runSubmitOnce(() => onUpdate(prompt.id, { sendBehavior: value }));
+                                    }}
+                                  >
+                                    <span className="prompt-action-menu-check" aria-hidden="true">
+                                      {selected ? "✓" : ""}
+                                    </span>
+                                    {label}
+                                  </button>
+                                );
+                              })}
+                              <div className="prompt-action-menu-divider" aria-hidden="true" />
                               {prompt.type === "group" ? (
                                 <button
                                   type="button"
