@@ -1101,7 +1101,11 @@ export function PromptManager({
                                 {messages.settings.clickBehaviorField}
                               </div>
                               {(["inherit", "paste_only", "paste_enter"] as const).map((value) => {
-                                const selected = (prompt.sendBehavior ?? "inherit") === value;
+                                const current = prompt.sendBehavior === "paste_only"
+                                  || prompt.sendBehavior === "paste_enter"
+                                  ? prompt.sendBehavior
+                                  : "inherit";
+                                const selected = current === value;
                                 const label = value === "inherit"
                                   ? messages.settings.followGlobal
                                   : value === "paste_only"
