@@ -2044,3 +2044,102 @@ button {
     pointer-events: auto;
   }
 }
+
+/* ── Split add button (prompt / divider) ─────────────────────────── */
+.prompt-manager .split-button {
+  display: inline-flex;
+  align-items: stretch;
+}
+
+.prompt-manager .split-button-main {
+  border-radius: 7px 0 0 7px;
+  padding-inline: 14px;
+}
+
+.prompt-manager .split-button-toggle-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.prompt-manager .split-button-toggle {
+  min-width: 24px;
+  padding-inline: 6px;
+  border-radius: 0 7px 7px 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.prompt-manager .split-button.is-disabled .split-button-main,
+.prompt-manager .split-button.is-disabled .split-button-toggle {
+  opacity: 0.55;
+}
+
+/* ── Divider rows (manager) ──────────────────────────────────────── */
+.prompt-manager .prompt-item-divider {
+  border-bottom: 0;
+  background: transparent;
+}
+
+.prompt-manager .prompt-divider-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 13px;
+  min-height: 32px;
+}
+
+.prompt-manager .prompt-divider-line {
+  flex: 1;
+  height: 1px;
+  background: var(--pp-border-strong);
+}
+
+.prompt-manager .prompt-divider-label {
+  color: var(--pp-muted);
+  font-size: 11px;
+  font-weight: 620;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.prompt-manager .prompt-divider-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 26px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+.prompt-manager .prompt-divider-row.is-inert {
+  opacity: 0.5;
+}
+
+.prompt-manager .prompt-divider-row.is-inert .prompt-divider-line {
+  background: var(--pp-border);
+}
+
+.prompt-manager .prompt-divider-row.is-editing {
+  gap: 8px;
+}
+
+/* ── Divider section headers (popover) ───────────────────────────── */
+.prompt-quick-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 4px;
+}
+
+.prompt-quick-divider-line {
+  flex: 1;
+  height: 1px;
+  background: var(--pp-border-strong);
+}
+
+.prompt-quick-divider-label {
+  color: var(--pp-muted);
+  font-size: 10px;
+  font-weight: 620;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}

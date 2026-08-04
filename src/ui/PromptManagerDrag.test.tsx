@@ -116,6 +116,7 @@ describe("prompt manager controlled dragging", () => {
     render(
       <PromptManager
         prompts={prompts}
+        dividers={[]}
         categories={[category]}
         activeCategoryId={category.id}
         categoryCounts={{ [category.id]: prompts.length }}
@@ -134,6 +135,9 @@ describe("prompt manager controlled dragging", () => {
         onUpdate={() => {}}
         onDelete={() => {}}
         onReorder={onReorder}
+        onCreateDivider={() => {}}
+        onUpdateDivider={() => {}}
+        onDeleteDivider={() => {}}
         onImport={() => {}}
         onExport={() => {}}
       />

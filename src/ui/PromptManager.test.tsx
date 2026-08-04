@@ -46,6 +46,7 @@ describe("prompt manager", () => {
   function renderManager(overrides: Partial<Parameters<typeof PromptManager>[0]> = {}) {
     const props = {
       prompts: mockPrompts,
+      dividers: [],
       categories: [defaultCategory],
       activeCategoryId: defaultCategory.id,
       categoryCounts: { [defaultCategory.id]: mockPrompts.length },
@@ -57,6 +58,9 @@ describe("prompt manager", () => {
       onUpdate: () => {},
       onDelete: () => {},
       onReorder: () => {},
+      onCreateDivider: () => {},
+      onUpdateDivider: () => {},
+      onDeleteDivider: () => {},
       onSelectCategory: () => {},
       onCreateCategory: () => {},
       onRenameCategory: () => {},

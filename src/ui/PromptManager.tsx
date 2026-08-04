@@ -10,6 +10,7 @@ import { Reorder, useDragControls } from "motion/react";
 import type {
   PromptCategory,
   PromptContainer,
+  PromptDivider,
   PromptSendBehavior,
 } from "../shared/promptTypes";
 import {
@@ -41,6 +42,7 @@ type Draft = {
 
 interface PromptManagerProps {
   prompts: PromptContainer[];
+  dividers: PromptDivider[];
   categories: PromptCategory[];
   activeCategoryId: string | null;
   categoryCounts: Record<string, number>;
@@ -94,6 +96,9 @@ interface PromptManagerProps {
   onSplitGroup: (id: string) => void | Promise<void>;
   onDelete: (id: string) => void | Promise<void>;
   onReorder: (orderedIds: string[]) => void | Promise<void>;
+  onCreateDivider: (input: { label?: string }) => void | Promise<void>;
+  onUpdateDivider: (id: string, input: { label?: string }) => void | Promise<void>;
+  onDeleteDivider: (id: string) => void | Promise<void>;
   onImport: () => void | Promise<void>;
   onExport: () => void | Promise<void>;
 }
@@ -173,14 +178,26 @@ function sameOrder(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((id, index) => id === right[index]);
 }
 
-function reconcilePromptIds(current: string[], prompts: PromptContainer[]): string[] {
-  const availableIds = new Set(prompts.map((prompt) => prompt.id));
-  const next = current.filter((id) => availableIds.has(id));
-  const includedIds = new Set(next);
-  for (const prompt of prompts) {
-    if (!includedIds.has(prompt.id)) next.push(prompt.id);
+function reconcileIds(current: string[], availableIds: string[]): string[] {
+  const availableSet = new Set(availableIds);
+  const next = current.filter((id) => availableSet.has(id));
+  const included = new Set(next);
+  for (const id of availableIds) {
+    if (!included.has(id)) next.push(id);
   }
   return next;
+}
+
+function mergeItemIds(
+  prompts: PromptContainer[],
+  dividers: PromptDivider[]
+): string[] {
+  return [
+    ...prompts.map((prompt) => ({ id: prompt.id, order: prompt.order })),
+    ...dividers.map((divider) => ({ id: divider.id, order: divider.order })),
+  ]
+    .sort((a, b) => a.order - b.order)
+    .map((item) => item.id);
 }
 
 type PromptReorderRowProps = {
@@ -263,6 +280,7 @@ function SendBehaviorBadge({ prompt, messages }: { prompt: PromptContainer; mess
 
 export function PromptManager({
   prompts,
+  dividers,
   categories,
   activeCategoryId,
   categoryCounts,
@@ -283,6 +301,9 @@ export function PromptManager({
   onSplitGroup,
   onDelete,
   onReorder,
+  onCreateDivider,
+  onUpdateDivider,
+  onDeleteDivider,
   onImport,
   onExport
 }: PromptManagerProps) {
@@ -301,8 +322,11 @@ export function PromptManager({
   const [splitConfirmId, setSplitConfirmId] = useState<string | null>(null);
   const [draggingMergeId, setDraggingMergeId] = useState<string | null>(null);
   const [draggingPromptId, setDraggingPromptId] = useState<string | null>(null);
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [editingDividerId, setEditingDividerId] = useState<string | null>(null);
+  const [dividerLabelDraft, setDividerLabelDraft] = useState("");
   const [orderedPromptIds, setOrderedPromptIds] = useState<string[]>(() =>
-    prompts.map((prompt) => prompt.id)
+    mergeItemIds(prompts, dividers)
   );
   const [reorderPending, setReorderPending] = useState(false);
   const [reorderError, setReorderError] = useState<string | null>(null);
@@ -322,6 +346,7 @@ export function PromptManager({
   const groupActionPendingRef = useRef(false);
   const orderedPromptIdsRef = useRef(orderedPromptIds);
   const reorderPendingRef = useRef(false);
+  const dividerLabelInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     return () => {
@@ -346,14 +371,16 @@ export function PromptManager({
     setSplitConfirmId(null);
     setGroupActionError(null);
     setReorderError(null);
+    setAddMenuOpen(false);
+    setEditingDividerId(null);
   }, [activeCategoryId]);
 
   useEffect(() => {
     if (draggingPromptId !== null || reorderPending) return;
-    const next = prompts.map((prompt) => prompt.id);
+    const next = mergeItemIds(prompts, dividers);
     orderedPromptIdsRef.current = next;
     setOrderedPromptIds((current) => sameOrder(current, next) ? current : next);
-  }, [draggingPromptId, prompts, reorderPending]);
+  }, [draggingPromptId, prompts, dividers, reorderPending]);
 
   useEffect(() => {
     if (!openMenuId) return;
@@ -370,6 +397,28 @@ export function PromptManager({
   }, [openMenuId]);
 
   useEffect(() => {
+    if (!addMenuOpen) return;
+    const close = () => setAddMenuOpen(false);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [addMenuOpen]);
+
+  useEffect(() => {
+    if (!editingDividerId) return;
+    window.requestAnimationFrame(() => {
+      dividerLabelInputRef.current?.focus();
+      dividerLabelInputRef.current?.select();
+    });
+  }, [editingDividerId]);
+
+  useEffect(() => {
     const isOpen = mergeIds.length > 0;
     if (isOpen && !mergeDialogOpenRef.current) {
       window.requestAnimationFrame(() => {
@@ -381,7 +430,8 @@ export function PromptManager({
   }, [mergeIds.length]);
 
   const hasDraftActivity = createPanelOpen || editingId !== null || deleteConfirmId !== null
-    || selectionMode || mergeIds.length > 0 || splitConfirmId !== null;
+    || selectionMode || mergeIds.length > 0 || splitConfirmId !== null
+    || editingDividerId !== null;
 
   useEffect(() => {
     onDraftActivityChange?.(hasDraftActivity);
@@ -498,11 +548,31 @@ export function PromptManager({
     setEditDraft(emptyDraft());
   };
 
-  const visiblePromptIds = reconcilePromptIds(orderedPromptIds, prompts);
   const promptById = new Map(prompts.map((prompt) => [prompt.id, prompt]));
-  const visiblePrompts = visiblePromptIds
-    .map((id) => promptById.get(id))
-    .filter((prompt): prompt is PromptContainer => Boolean(prompt));
+  const dividerById = new Map(dividers.map((divider) => [divider.id, divider]));
+  const visibleItemIds = reconcileIds(orderedPromptIds, mergeItemIds(prompts, dividers));
+
+  const commitDividerLabel = async (id: string) => {
+    const label = dividerLabelDraft.trim();
+    setEditingDividerId(null);
+    const divider = dividerById.get(id);
+    if (!divider || label === divider.label) return;
+    try {
+      await onUpdateDivider(id, { label });
+    } catch (error) {
+      console.error("Failed to rename divider:", error);
+    }
+  };
+
+  const handleCreateDivider = async () => {
+    setAddMenuOpen(false);
+    try {
+      await onCreateDivider({});
+      showCreateToast(messages.manager.addDivider);
+    } catch (error) {
+      console.error("Failed to create divider:", error);
+    }
+  };
 
   const updatePromptOrder = (next: string[]) => {
     orderedPromptIdsRef.current = next;
@@ -529,16 +599,16 @@ export function PromptManager({
 
   const handleMoveUp = (index: number) => {
     if (index === 0 || reorderPendingRef.current) return;
-    const fallback = prompts.map((prompt) => prompt.id);
-    const next = moveArrayItem(visiblePromptIds, index, index - 1);
+    const fallback = mergeItemIds(prompts, dividers);
+    const next = moveArrayItem(visibleItemIds, index, index - 1);
     updatePromptOrder(next);
     void persistPromptOrder(next, fallback);
   };
 
   const handleMoveDown = (index: number) => {
-    if (index === visiblePromptIds.length - 1 || reorderPendingRef.current) return;
-    const fallback = prompts.map((prompt) => prompt.id);
-    const next = moveArrayItem(visiblePromptIds, index, index + 1);
+    if (index === visibleItemIds.length - 1 || reorderPendingRef.current) return;
+    const fallback = mergeItemIds(prompts, dividers);
+    const next = moveArrayItem(visibleItemIds, index, index + 1);
     updatePromptOrder(next);
     void persistPromptOrder(next, fallback);
   };
@@ -652,7 +722,7 @@ export function PromptManager({
   const splitPrompt = prompts.find((prompt) => prompt.id === splitConfirmId) ?? null;
   const groupActionBusy = groupActionPending !== null;
   const groupDialogOpen = mergeIds.length > 0 || splitPrompt !== null;
-  const promptReorderEnabled = visiblePrompts.length > 1
+  const promptReorderEnabled = visibleItemIds.length > 1
     && editingId === null
     && deleteConfirmId === null
     && !selectionMode
@@ -662,7 +732,7 @@ export function PromptManager({
 
   const handlePromptDragEnd = () => {
     const next = orderedPromptIdsRef.current;
-    const fallback = prompts.map((prompt) => prompt.id);
+    const fallback = mergeItemIds(prompts, dividers);
     setDraggingPromptId(null);
     void persistPromptOrder(next, fallback);
   };
@@ -730,14 +800,44 @@ export function PromptManager({
                     {messages.manager.selectPrompts}
                   </button>
                 ) : null}
-                <button
-                  className="button button-primary list-add-button"
-                  type="button"
-                  onClick={openCreatePanel}
-                  disabled={selectionMode}
-                >
-                  + {messages.manager.addPrompt}
-                </button>
+                <div className={`split-button ${selectionMode ? "is-disabled" : ""}`}>
+                  <button
+                    className="button button-primary split-button-main"
+                    type="button"
+                    onClick={openCreatePanel}
+                    disabled={selectionMode}
+                  >
+                    + {messages.manager.addPrompt}
+                  </button>
+                  <div
+                    className="split-button-toggle-wrap"
+                    onPointerDown={(event) => event.stopPropagation()}
+                  >
+                    <button
+                      className="button button-primary split-button-toggle"
+                      type="button"
+                      aria-label={messages.manager.addMenuAria}
+                      aria-haspopup="menu"
+                      aria-expanded={addMenuOpen}
+                      disabled={selectionMode}
+                      onClick={() => setAddMenuOpen((open) => !open)}
+                    >
+                      ▾
+                    </button>
+                    {addMenuOpen ? (
+                      <div className="prompt-action-menu split-button-menu" role="menu">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="prompt-action-menu-item"
+                          onClick={() => void handleCreateDivider()}
+                        >
+                          {messages.manager.addDivider}
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
               </div>
             </div>
             {createPanelOpen ? (
@@ -872,18 +972,116 @@ export function PromptManager({
             <Reorder.Group
               as="div"
               axis="y"
-              values={visiblePromptIds}
+              values={visibleItemIds}
               onReorder={updatePromptOrder}
               className="prompt-list"
               layoutScroll
               role="list"
               data-reorder-list="true"
             >
-              {prompts.length === 0 ? (
+              {visibleItemIds.length === 0 ? (
                 <div className="empty-state-block">
                   {activeCategoryId ? messages.manager.emptyCategory : messages.manager.noPrompts}
                 </div>
-              ) : visiblePrompts.map((prompt, index) => (
+              ) : visibleItemIds.map((id, index) => {
+                const divider = dividerById.get(id);
+                if (divider) {
+                  return (
+                    <PromptReorderRow
+                      key={divider.id}
+                      id={divider.id}
+                      enabled={promptReorderEnabled}
+                      onDragStart={() => {
+                        setOpenMenuId(null);
+                        setDraggingPromptId(divider.id);
+                      }}
+                      onDragEnd={handlePromptDragEnd}
+                      className={`prompt-item prompt-item-divider ${promptReorderEnabled ? "is-reorder-enabled" : ""} ${draggingPromptId === divider.id ? "is-dragging" : ""}`}
+                    >
+                      {selectionMode ? (
+                        <div className="prompt-divider-row is-inert" aria-hidden="true">
+                          <span className="prompt-divider-line" />
+                          {divider.label ? <span className="prompt-divider-label">{divider.label}</span> : null}
+                          <span className="prompt-divider-line" />
+                        </div>
+                      ) : editingDividerId === divider.id ? (
+                        <div className="prompt-divider-row is-editing">
+                          <span className="prompt-divider-line" />
+                          <input
+                            ref={dividerLabelInputRef}
+                            className="field prompt-divider-input"
+                            type="text"
+                            value={dividerLabelDraft}
+                            placeholder={messages.manager.dividerLabelPlaceholder}
+                            onChange={(e) => setDividerLabelDraft(e.target.value)}
+                            onBlur={() => void commitDividerLabel(divider.id)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                void commitDividerLabel(divider.id);
+                              } else if (e.key === "Escape") {
+                                e.preventDefault();
+                                setEditingDividerId(null);
+                              }
+                            }}
+                          />
+                          <span className="prompt-divider-line" />
+                        </div>
+                      ) : (
+                        <div className="prompt-divider-row">
+                          <span className="prompt-divider-line" />
+                          {divider.label ? <span className="prompt-divider-label">{divider.label}</span> : null}
+                          <span className="prompt-divider-line" />
+                          <div
+                            className="prompt-actions"
+                            onPointerDown={(event) => event.stopPropagation()}
+                          >
+                            <div className="prompt-action-menu-wrap">
+                              <button
+                                type="button"
+                                className="button icon-button prompt-action-trigger"
+                                aria-label={messages.manager.dividerAriaLabel}
+                                onClick={() => setOpenMenuId(openMenuId === divider.id ? null : divider.id)}
+                              >
+                                ⋯
+                              </button>
+                              {openMenuId === divider.id ? (
+                                <div className="prompt-action-menu" role="menu">
+                                  <button
+                                    type="button"
+                                    role="menuitem"
+                                    className="prompt-action-menu-item"
+                                    onClick={() => {
+                                      setDividerLabelDraft(divider.label);
+                                      setEditingDividerId(divider.id);
+                                      setOpenMenuId(null);
+                                    }}
+                                  >
+                                    {messages.manager.renameDivider}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    role="menuitem"
+                                    className="prompt-action-menu-item is-danger"
+                                    onClick={() => {
+                                      setOpenMenuId(null);
+                                      void onDeleteDivider(divider.id);
+                                    }}
+                                  >
+                                    {messages.manager.deleteDivider}
+                                  </button>
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </PromptReorderRow>
+                  );
+                }
+                const prompt = promptById.get(id);
+                if (!prompt) return null;
+                return (
                 <PromptReorderRow
                   key={prompt.id}
                   id={prompt.id}
@@ -1065,7 +1263,7 @@ export function PromptManager({
                           className="button icon-button"
                           aria-label={messages.manager.moveCombinedPromptDown(prompt.title)}
                           onClick={() => handleMoveDown(index)}
-                          disabled={reorderPending || index === visiblePrompts.length - 1}
+                          disabled={reorderPending || index === visibleItemIds.length - 1}
                         >
                           ↓
                         </button>
@@ -1163,7 +1361,8 @@ export function PromptManager({
                     </div>
                   )}
                 </PromptReorderRow>
-              ))}
+                );
+              })}
             </Reorder.Group>
             </div>
             {mergeIds.length > 0 ? (

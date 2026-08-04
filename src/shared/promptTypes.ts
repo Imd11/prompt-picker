@@ -54,6 +54,15 @@ export type PromptContainerInput = {
   categoryId?: string;
 };
 
+export type PromptDivider = {
+  id: string;
+  categoryId: string;
+  label: string;
+  order: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export const DEFAULT_GROUP_INTERVAL_MS = 700;
 export const MIN_GROUP_INTERVAL_MS = 200;
 export const MAX_GROUP_INTERVAL_MS = 3000;

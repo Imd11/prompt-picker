@@ -17,9 +17,10 @@ describe("prompt import export", () => {
     const json = await store.exportJson();
     const data = JSON.parse(json);
 
-    expect(data.version).toBe(3);
+    expect(data.version).toBe(4);
     expect(Array.isArray(data.categories)).toBe(true);
     expect(Array.isArray(data.containers)).toBe(true);
+    expect(Array.isArray(data.dividers)).toBe(true);
     expect(data.activeCategoryId).toBe("category-default");
   });
 

@@ -2,6 +2,7 @@ import type {
   PromptCategory,
   PromptContainer,
   PromptContainerInput,
+  PromptDivider,
   PromptEntry,
   PromptItem,
 } from "./promptTypes";
@@ -39,11 +40,20 @@ type PromptStoreDataV3 = {
   activeCategoryId: string | null;
 };
 
-type PromptStoreData = PromptStoreDataV1 | PromptStoreDataV2 | PromptStoreDataV3;
+type PromptStoreDataV4 = {
+  version: 4;
+  categories: PromptCategory[];
+  containers: LegacyPromptContainer[];
+  dividers: Partial<PromptDivider>[];
+  activeCategoryId: string | null;
+};
+
+type PromptStoreData = PromptStoreDataV1 | PromptStoreDataV2 | PromptStoreDataV3 | PromptStoreDataV4;
 
 export type PromptLibrarySnapshot = {
   categories: PromptCategory[];
   containers: PromptContainer[];
+  dividers: PromptDivider[];
   activeCategoryId: string;
 };
 
@@ -62,6 +72,7 @@ type NormalizedPromptStore = PromptLibrarySnapshot;
 type RawPromptStore = {
   categories?: Partial<PromptCategory>[];
   containers?: LegacyPromptContainer[];
+  dividers?: Partial<PromptDivider>[];
   activeCategoryId?: string | null;
 };
 
@@ -92,6 +103,10 @@ function sortCategories(categories: PromptCategory[]): PromptCategory[] {
 
 function sortContainers(containers: PromptContainer[]): PromptContainer[] {
   return [...containers].sort((a, b) => a.order - b.order);
+}
+
+function sortDividers(dividers: PromptDivider[]): PromptDivider[] {
+  return [...dividers].sort((a, b) => a.order - b.order);
 }
 
 function sortEntries(entries: PromptEntry[]): PromptEntry[] {
@@ -176,6 +191,23 @@ function normalizeCategory(
   };
 }
 
+function normalizeDivider(
+  divider: Partial<PromptDivider>,
+  order: number,
+  now: string,
+  categoryId: string
+): PromptDivider {
+  const label = typeof divider.label === "string" ? divider.label : "";
+  return {
+    id: divider.id || generateId("divider"),
+    categoryId,
+    label,
+    order,
+    createdAt: divider.createdAt || now,
+    updatedAt: divider.updatedAt || now,
+  };
+}
+
 function containerToInput(container: PromptContainer | LegacyPromptContainer): PromptContainerInput {
   return {
     title: container.title,
@@ -253,6 +285,21 @@ function normalizeStore(raw: RawPromptStore): NormalizedPromptStore {
     })
   );
 
+  const dividers = sortDividers(
+    (raw.dividers ?? []).map((divider, index) => {
+      const rawCategoryId = typeof divider.categoryId === "string"
+        ? divider.categoryId
+        : undefined;
+      const categoryId = rawCategoryId && categoryIds.has(rawCategoryId)
+        ? rawCategoryId
+        : fallbackCategoryId;
+      const order = typeof divider.order === "number" && Number.isFinite(divider.order)
+        ? divider.order
+        : index;
+      return normalizeDivider(divider, order, now, categoryId);
+    })
+  );
+
   const activeCategoryId =
     raw.activeCategoryId && categoryIds.has(raw.activeCategoryId)
       ? raw.activeCategoryId
@@ -261,6 +308,7 @@ function normalizeStore(raw: RawPromptStore): NormalizedPromptStore {
   return {
     categories,
     containers,
+    dividers,
     activeCategoryId,
   };
 }
@@ -272,6 +320,7 @@ function parseStore(data: string | null): NormalizedPromptStore {
     return {
       categories: [fallback],
       containers: [],
+      dividers: [],
       activeCategoryId: fallback.id,
     };
   }
@@ -308,10 +357,23 @@ function parseStore(data: string | null): NormalizedPromptStore {
         activeCategoryId: parsed.activeCategoryId ?? undefined,
       });
     }
+    if (
+      parsed.version === 4 &&
+      Array.isArray(parsed.categories) &&
+      Array.isArray(parsed.containers)
+    ) {
+      return normalizeStore({
+        categories: parsed.categories,
+        containers: parsed.containers,
+        dividers: Array.isArray(parsed.dividers) ? parsed.dividers : [],
+        activeCategoryId: parsed.activeCategoryId ?? undefined,
+      });
+    }
   } catch {
     return {
       categories: [fallback],
       containers: [],
+      dividers: [],
       activeCategoryId: fallback.id,
     };
   }
@@ -319,6 +381,7 @@ function parseStore(data: string | null): NormalizedPromptStore {
   return {
     categories: [fallback],
     containers: [],
+    dividers: [],
     activeCategoryId: fallback.id,
   };
 }
@@ -381,6 +444,19 @@ function validateImportedData(json: string): NormalizedPromptStore {
     });
   }
 
+  if (
+    parsed.version === 4 &&
+    Array.isArray(parsed.categories) &&
+    Array.isArray(parsed.containers)
+  ) {
+    return normalizeStore({
+      categories: parsed.categories,
+      containers: parsed.containers,
+      dividers: Array.isArray(parsed.dividers) ? parsed.dividers : [],
+      activeCategoryId: parsed.activeCategoryId ?? undefined,
+    });
+  }
+
   throw new Error("Invalid format");
 }
 
@@ -389,10 +465,11 @@ export function validatePromptLibraryJson(json: string): void {
 }
 
 function serializeStore(store: NormalizedPromptStore): string {
-  const data: PromptStoreDataV3 = {
-    version: 3,
+  const data: PromptStoreDataV4 = {
+    version: 4,
     categories: sortCategories(store.categories),
     containers: sortContainers(store.containers),
+    dividers: sortDividers(store.dividers),
     activeCategoryId: store.activeCategoryId,
   };
   return JSON.stringify(data, null, 2);
@@ -506,6 +583,7 @@ export function createPromptStore(adapter: StorageAdapter) {
       await save({
         ...store,
         categories,
+        dividers: store.dividers.filter((divider) => divider.categoryId !== id),
         activeCategoryId:
           store.activeCategoryId === id
             ? categories[0]?.id ?? DEFAULT_CATEGORY_ID
@@ -623,6 +701,58 @@ export function createPromptStore(adapter: StorageAdapter) {
       await save({
         ...store,
         containers: store.containers.filter((p) => p.id !== id),
+      });
+    },
+
+    async createDivider(input: {
+      categoryId?: string;
+      label?: string;
+    }): Promise<PromptDivider> {
+      const store = await load();
+      const categoryId = await resolveCategoryId(store, input.categoryId);
+      const maxOrder = [
+        ...store.containers.filter((c) => c.categoryId === categoryId),
+        ...store.dividers.filter((d) => d.categoryId === categoryId),
+      ].reduce((max, item) => Math.max(max, item.order), -1);
+      const now = nowIso();
+      const divider = normalizeDivider(
+        { label: input.label ?? "" },
+        maxOrder + 1,
+        now,
+        categoryId
+      );
+      await save({
+        ...store,
+        dividers: [...store.dividers, divider],
+      });
+      return divider;
+    },
+
+    async updateDivider(
+      id: string,
+      input: { label?: string }
+    ): Promise<PromptDivider | null> {
+      const store = await load();
+      const idx = store.dividers.findIndex((d) => d.id === id);
+      if (idx === -1) return null;
+      const existing = store.dividers[idx];
+      const now = nowIso();
+      const updated: PromptDivider = {
+        ...existing,
+        label: input.label === undefined ? existing.label : input.label,
+        updatedAt: now,
+      };
+      const dividers = [...store.dividers];
+      dividers[idx] = updated;
+      await save({ ...store, dividers });
+      return updated;
+    },
+
+    async removeDivider(id: string): Promise<void> {
+      const store = await load();
+      await save({
+        ...store,
+        dividers: store.dividers.filter((d) => d.id !== id),
       });
     },
 
@@ -757,30 +887,61 @@ export function createPromptStore(adapter: StorageAdapter) {
     async reorder(orderedIds: string[], categoryId?: string): Promise<void> {
       const store = await load();
       const targetCategoryId = categoryId ?? store.activeCategoryId;
-      const target = store.containers.filter(
+      const targetContainers = store.containers.filter(
         (container) => container.categoryId === targetCategoryId
       );
-      const untouched = store.containers.filter(
+      const targetDividers = store.dividers.filter(
+        (divider) => divider.categoryId === targetCategoryId
+      );
+      const untouchedContainers = store.containers.filter(
         (container) => container.categoryId !== targetCategoryId
       );
-      const map = new Map(target.map((p) => [p.id, p]));
-      const reordered: PromptContainer[] = [];
+      const untouchedDividers = store.dividers.filter(
+        (divider) => divider.categoryId !== targetCategoryId
+      );
+      const containerMap = new Map(targetContainers.map((p) => [p.id, p]));
+      const dividerMap = new Map(targetDividers.map((d) => [d.id, d]));
+
+      type MixedItem =
+        | { kind: "container"; data: PromptContainer }
+        | { kind: "divider"; data: PromptDivider };
+      const ordered: MixedItem[] = [];
+      const seenContainerIds = new Set<string>();
+      const seenDividerIds = new Set<string>();
       for (const id of orderedIds) {
-        const p = map.get(id);
-        if (p) reordered.push(p);
+        if (dividerMap.has(id)) {
+          seenDividerIds.add(id);
+          ordered.push({ kind: "divider", data: dividerMap.get(id)! });
+        } else if (containerMap.has(id)) {
+          seenContainerIds.add(id);
+          ordered.push({ kind: "container", data: containerMap.get(id)! });
+        }
       }
-      for (const p of target) {
-        if (!orderedIds.includes(p.id)) reordered.push(p);
+      for (const container of targetContainers) {
+        if (!seenContainerIds.has(container.id)) {
+          ordered.push({ kind: "container", data: container });
+        }
       }
+      for (const divider of targetDividers) {
+        if (!seenDividerIds.has(divider.id)) {
+          ordered.push({ kind: "divider", data: divider });
+        }
+      }
+
       const now = nowIso();
-      const normalizedTarget = reordered.map((p, i) => ({
-        ...p,
-        order: i,
-        updatedAt: now,
-      }));
+      const normalizedContainers: PromptContainer[] = [];
+      const normalizedDividers: PromptDivider[] = [];
+      ordered.forEach((item, i) => {
+        if (item.kind === "container") {
+          normalizedContainers.push({ ...item.data, order: i, updatedAt: now });
+        } else {
+          normalizedDividers.push({ ...item.data, order: i, updatedAt: now });
+        }
+      });
       await save({
         ...store,
-        containers: [...untouched, ...normalizedTarget],
+        containers: [...untouchedContainers, ...normalizedContainers],
+        dividers: [...untouchedDividers, ...normalizedDividers],
       });
     },
 

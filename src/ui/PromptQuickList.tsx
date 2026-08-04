@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import type { PromptCategory, PromptContainer } from "../shared/promptTypes";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { PromptCategory, PromptContainer, PromptDivider } from "../shared/promptTypes";
 import {
   getPromptContainerBodies,
   getPromptContainerPreviewLines,
@@ -8,6 +8,7 @@ import type { Messages } from "../shared/i18n";
 
 interface PromptQuickListProps {
   prompts: PromptContainer[];
+  dividers?: PromptDivider[];
   categories?: PromptCategory[];
   activeCategoryId?: string | null;
   getCategoryDisplayName?: (category: PromptCategory) => string;
@@ -51,6 +52,7 @@ function clamp(value: number, min: number, max: number): number {
 
 export function PromptQuickList({
   prompts,
+  dividers = [],
   categories,
   activeCategoryId = null,
   getCategoryDisplayName,
@@ -70,6 +72,23 @@ export function PromptQuickList({
   const hoverPreviewAnchorRef = useRef<HoverPreviewAnchor | null>(null);
   const livePointerPositionRef = useRef<NativePopoverPointerPosition | null>(null);
   const hoveredPrompt = prompts.find((prompt) => prompt.id === hoverPreview?.promptId) ?? null;
+
+  const mergedItems = useMemo(() => {
+    return [
+      ...prompts.map((prompt) => ({
+        kind: "prompt" as const,
+        id: prompt.id,
+        order: prompt.order,
+        prompt,
+      })),
+      ...dividers.map((divider) => ({
+        kind: "divider" as const,
+        id: divider.id,
+        order: divider.order,
+        divider,
+      })),
+    ].sort((a, b) => a.order - b.order);
+  }, [prompts, dividers]);
 
   useEffect(() => {
     return () => {
@@ -294,7 +313,25 @@ export function PromptQuickList({
             </span>
           </div>
         ) : (
-          prompts.map((prompt) => (
+          mergedItems.map((item) => {
+            if (item.kind === "divider") {
+              const { divider } = item;
+              return (
+                <div
+                  key={divider.id}
+                  className="prompt-quick-divider"
+                  role="presentation"
+                >
+                  <span className="prompt-quick-divider-line" />
+                  {divider.label ? (
+                    <span className="prompt-quick-divider-label">{divider.label}</span>
+                  ) : null}
+                  <span className="prompt-quick-divider-line" />
+                </div>
+              );
+            }
+            const prompt = item.prompt;
+            return (
             <button
               key={prompt.id}
               data-prompt-id={prompt.id}
@@ -339,7 +376,8 @@ export function PromptQuickList({
                 ))}
               </span>
             </button>
-          ))
+            );
+          })
         )}
       </div>
       {hoveredPrompt && hoverPreview ? (

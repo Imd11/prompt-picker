@@ -3,7 +3,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { writeTextFile, readTextFile } from "@tauri-apps/plugin-fs";
-import type { PromptCategory, PromptContainer, PromptSendBehavior } from "./shared/promptTypes";
+import type { PromptCategory, PromptContainer, PromptDivider, PromptSendBehavior } from "./shared/promptTypes";
 import { getPromptContainerBodies } from "./shared/promptTypes";
 import type { AppLanguage, PromptInsertionMode, Settings } from "./shared/settingsStore";
 import { createSettingsStore } from "./shared/settingsStore";
@@ -280,6 +280,7 @@ export function App({
   const [windowLabel, setWindowLabel] = useState(currentWindowLabel);
   const [prompts, setPrompts] = useState<PromptContainer[]>([]);
   const [categories, setCategories] = useState<PromptCategory[]>([]);
+  const [dividers, setDividers] = useState<PromptDivider[]>([]);
   const [activeCategoryId, setActiveCategoryId] = useState<string | null>(null);
   const [categoryActionError, setCategoryActionError] = useState<string | null>(null);
   const [submittingPromptId, setSubmittingPromptId] = useState<string | null>(null);
@@ -320,6 +321,7 @@ export function App({
   const applyPromptData = useCallback((data: PromptLibrarySnapshot) => {
     setPrompts(data.containers);
     setCategories(data.categories);
+    setDividers(data.dividers);
     setActiveCategoryId(data.activeCategoryId);
   }, []);
   const reloadPromptData = useCallback(async () => {
@@ -338,6 +340,12 @@ export function App({
       ? prompts.filter((prompt) => prompt.categoryId === activeCategory.id)
       : prompts
   ), [activeCategory, prompts]);
+
+  const activeDividers = useMemo(() => (
+    activeCategory
+      ? dividers.filter((divider) => divider.categoryId === activeCategory.id)
+      : dividers
+  ), [activeCategory, dividers]);
 
   const categoryCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -795,6 +803,7 @@ export function App({
         <div className="app-window app-window-main app-window-manager">
           <PromptManager
             prompts={activePrompts}
+            dividers={activeDividers}
             categories={categories}
             activeCategoryId={activeCategory?.id ?? null}
             categoryCounts={categoryCounts}
@@ -845,6 +854,20 @@ export function App({
               await storeRef.current.reorder(ids, activeCategory?.id);
               await reloadPromptData();
               emitCalicoMotion("react-poke", "reorder-prompts", 2500);
+            }}
+            onCreateDivider={async (input) => {
+              await storeRef.current.createDivider({ ...input, categoryId: activeCategory?.id });
+              await reloadPromptData();
+              emitCalicoMotion("happy", "create-prompt-success", 3000);
+            }}
+            onUpdateDivider={async (id, input) => {
+              await storeRef.current.updateDivider(id, input);
+              await reloadPromptData();
+            }}
+            onDeleteDivider={async (id) => {
+              await storeRef.current.removeDivider(id);
+              await reloadPromptData();
+              emitCalicoMotion("happy", "delete-prompt-success", 2200);
             }}
             onImport={openPromptImportChoice}
             onExport={async () => {
@@ -951,6 +974,7 @@ export function App({
       <div className="popover-window">
         <PromptQuickList
           prompts={activePrompts}
+          dividers={activeDividers}
           categories={categories}
           activeCategoryId={activeCategory?.id ?? null}
           getCategoryDisplayName={getCategoryDisplayName}

@@ -269,9 +269,10 @@ describe("prompt store", () => {
     const json = await store.exportJson();
     const data = JSON.parse(json);
 
-    expect(data.version).toBe(3);
+    expect(data.version).toBe(4);
     expect(Array.isArray(data.categories)).toBe(true);
     expect(Array.isArray(data.containers)).toBe(true);
+    expect(Array.isArray(data.dividers)).toBe(true);
     expect(data.activeCategoryId).toBe("category-default");
   });
 
@@ -431,5 +432,75 @@ describe("prompt store", () => {
 
     expect(devTitles).toEqual(["Dev Second", "Dev First"]);
     expect(writingTitles).toEqual([writingOnly.title]);
+  });
+
+  it("creates a divider at the end of the active category", async () => {
+    const store = createTestStore();
+    await store.create({ title: "Prompt A", body: "a" });
+    const divider = await store.createDivider({ label: "Section" });
+
+    expect(divider.id).toMatch(/^divider-/);
+    expect(divider.label).toBe("Section");
+    expect(divider.categoryId).toBe("category-default");
+
+    const data = await store.getData();
+    expect(data.dividers).toHaveLength(1);
+    expect(data.dividers[0].order).toBe(1);
+  });
+
+  it("updates and removes a divider label", async () => {
+    const store = createTestStore();
+    const divider = await store.createDivider({ label: "Old" });
+
+    const renamed = await store.updateDivider(divider.id, { label: "New" });
+    expect(renamed?.label).toBe("New");
+    expect((await store.getData()).dividers[0].label).toBe("New");
+
+    await store.removeDivider(divider.id);
+    expect((await store.getData()).dividers).toHaveLength(0);
+  });
+
+  it("reorder interleaves containers and dividers by position", async () => {
+    const store = createTestStore();
+    const a = await store.create({ title: "A", body: "a" });
+    const b = await store.create({ title: "B", body: "b" });
+    const sep = await store.createDivider({ label: "Sep" });
+
+    // Requested merged order: A, Sep, B
+    await store.reorder([a.id, sep.id, b.id]);
+
+    const data = await store.getData();
+    const merged = [
+      ...data.containers.map((c) => ({ id: c.id, order: c.order, kind: "c" })),
+      ...data.dividers.map((d) => ({ id: d.id, order: d.order, kind: "d" })),
+    ].sort((x, y) => x.order - y.order);
+    expect(merged.map((m) => m.id)).toEqual([a.id, sep.id, b.id]);
+    expect(merged.map((m) => m.order)).toEqual([0, 1, 2]);
+  });
+
+  it("loads a legacy v3 store with an empty dividers array", async () => {
+    const v3 = JSON.stringify({
+      version: 3,
+      categories: [{ id: "category-default", name: "Default", order: 0, createdAt: "t", updatedAt: "t" }],
+      containers: [],
+      activeCategoryId: "category-default",
+    });
+    const store = createTestStoreWithState(v3);
+    const data = await store.getData();
+    expect(data.dividers).toEqual([]);
+    // Re-exporting bumps to v4 with dividers.
+    const exported = JSON.parse(await store.exportJson());
+    expect(exported.version).toBe(4);
+    expect(exported.dividers).toEqual([]);
+  });
+
+  it("removing a category also removes its dividers", async () => {
+    const store = createTestStore();
+    const extra = await store.createCategory("Extra");
+    await store.createDivider({ label: "In extra", categoryId: extra.id });
+    expect((await store.getData()).dividers).toHaveLength(1);
+
+    await store.removeCategory(extra.id);
+    expect((await store.getData()).dividers).toHaveLength(0);
   });
 });
