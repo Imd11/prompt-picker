@@ -198,13 +198,15 @@ fn paste_prompt(body: String, app: tauri::AppHandle) -> Result<(), String> {
 async fn paste_prompt_and_submit_to_last_target(
     body: String,
     submit_key: Option<String>,
+    container_id: Option<String>,
     session_state: tauri::State<'_, PromptPickSessionState>,
     recent_state: tauri::State<'_, LastInputTargetState>,
     settings_state: tauri::State<'_, SettingsFileState>,
     app: tauri::AppHandle,
 ) -> Result<AutosendOutcome, String> {
     native_submit_key_from_arg(submit_key)?;
-    let submit_key = authoritative_submit_key(settings_state.read_text());
+    let submit_key =
+        authoritative_submit_key_for_container(container_id.as_deref(), &settings_state, &app);
     let session_state = session_state.inner().clone();
     let recent_state = recent_state.inner().clone();
     let app = app.clone();
@@ -279,13 +281,15 @@ async fn paste_prompt_sequence_and_submit_to_last_target(
     bodies: Vec<String>,
     interval_ms: u64,
     submit_key: Option<String>,
+    container_id: Option<String>,
     session_state: tauri::State<'_, PromptPickSessionState>,
     recent_state: tauri::State<'_, LastInputTargetState>,
     settings_state: tauri::State<'_, SettingsFileState>,
     app: tauri::AppHandle,
 ) -> Result<AutosendSequenceOutcome, String> {
     native_submit_key_from_arg(submit_key)?;
-    let submit_key = authoritative_submit_key(settings_state.read_text());
+    let submit_key =
+        authoritative_submit_key_for_container(container_id.as_deref(), &settings_state, &app);
     let session_state = session_state.inner().clone();
     let recent_state = recent_state.inner().clone();
     let app = app.clone();
@@ -474,6 +478,117 @@ fn authoritative_submit_key(
             _ => platform::macos::NativeSubmitKey::None,
         })
         .unwrap_or(platform::macos::NativeSubmitKey::None)
+}
+
+const MAX_PROMPT_LIBRARY_RESOLUTION_BYTES: u64 = 10 * 1024 * 1024;
+
+fn container_send_behavior_from_library(
+    library_text: &str,
+    container_id: &str,
+) -> Option<String> {
+    let library = serde_json::from_str::<serde_json::Value>(library_text).ok()?;
+    let containers = library.get("containers")?.as_array()?;
+    containers
+        .iter()
+        .find(|container| {
+            container.get("id").and_then(serde_json::Value::as_str) == Some(container_id)
+        })
+        .and_then(|container| container.get("sendBehavior"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+}
+
+fn submit_key_for_container_behavior(
+    behavior: Option<&str>,
+    global: platform::macos::NativeSubmitKey,
+) -> platform::macos::NativeSubmitKey {
+    // Mirrors the frontend's resolveSendSubmitKey: only the two explicit
+    // overrides win; inherit/legacy/unknown values defer to the global mode.
+    match behavior {
+        Some("paste_only") => platform::macos::NativeSubmitKey::None,
+        Some("paste_enter") => platform::macos::NativeSubmitKey::Enter,
+        _ => global,
+    }
+}
+
+fn read_validated_prompt_library_file(path: &std::path::Path) -> Option<String> {
+    prompt_files::validate_prompt_library_path(path.to_str()?).ok()?;
+    let metadata = std::fs::metadata(path).ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_PROMPT_LIBRARY_RESOLUTION_BYTES {
+        return None;
+    }
+    std::fs::read_to_string(path).ok()
+}
+
+fn modified_millis(path: &std::path::Path) -> u128 {
+    std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
+
+// Picks the freshest readable library among the linked file and the internal
+// copy. Normal saves write both; a failed external write leaves the internal
+// copy newer; a hand-edited linked file is newer externally.
+fn select_prompt_library_text(paths: &[std::path::PathBuf]) -> Option<String> {
+    paths
+        .iter()
+        .filter_map(|path| {
+            read_validated_prompt_library_file(path)
+                .map(|text| (modified_millis(path), text))
+        })
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, text)| text)
+}
+
+fn authoritative_submit_key_for_container(
+    container_id: Option<&str>,
+    settings_state: &SettingsFileState,
+    app: &tauri::AppHandle,
+) -> platform::macos::NativeSubmitKey {
+    let settings_text = settings_state.read_text();
+    let global = authoritative_submit_key(settings_text.clone());
+
+    let Some(container_id) = container_id else {
+        return global;
+    };
+    let settings_value = settings_text
+        .ok()
+        .flatten()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+    let linked_path = settings_value
+        .as_ref()
+        .filter(|value| {
+            value
+                .pointer("/promptLibraryLink/mode")
+                .and_then(serde_json::Value::as_str)
+                == Some("linked")
+        })
+        .and_then(|value| {
+            value
+                .pointer("/promptLibraryLink/path")
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(std::path::PathBuf::from);
+    let internal_path = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| dir.join("prompts.json"));
+    let mut candidates = Vec::new();
+    if let Some(path) = internal_path {
+        candidates.push(path);
+    }
+    if let Some(path) = linked_path {
+        candidates.push(path);
+    }
+    let Some(library_text) = select_prompt_library_text(&candidates) else {
+        return global;
+    };
+    let behavior = container_send_behavior_from_library(&library_text, container_id);
+    submit_key_for_container_behavior(behavior.as_deref(), global)
 }
 
 fn prompt_pick_target_or_recent(
@@ -4458,6 +4573,106 @@ mod last_input_target_tests {
             authoritative_submit_key(settings_for("paste_and_submit")),
             platform::macos::NativeSubmitKey::Enter
         );
+    }
+
+    fn library_with_behavior(id: &str, behavior: &str) -> String {
+        serde_json::json!({
+            "version": 4,
+            "categories": [],
+            "containers": [
+                { "id": id, "sendBehavior": behavior },
+                { "id": "other", "sendBehavior": "paste_enter" }
+            ],
+            "dividers": []
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn container_behavior_overrides_global_mode() {
+        let library = library_with_behavior("target", "paste_only");
+        let behavior = container_send_behavior_from_library(&library, "target");
+        assert_eq!(
+            submit_key_for_container_behavior(
+                behavior.as_deref(),
+                platform::macos::NativeSubmitKey::Enter
+            ),
+            platform::macos::NativeSubmitKey::None
+        );
+
+        let library = library_with_behavior("target", "paste_enter");
+        let behavior = container_send_behavior_from_library(&library, "target");
+        assert_eq!(
+            submit_key_for_container_behavior(
+                behavior.as_deref(),
+                platform::macos::NativeSubmitKey::None
+            ),
+            platform::macos::NativeSubmitKey::Enter
+        );
+    }
+
+    #[test]
+    fn container_behavior_defers_to_global_for_inherit_legacy_and_unknown() {
+        for behavior in ["inherit", "paste_command_enter"] {
+            let library = library_with_behavior("target", behavior);
+            let resolved = container_send_behavior_from_library(&library, "target");
+            assert_eq!(
+                submit_key_for_container_behavior(
+                    resolved.as_deref(),
+                    platform::macos::NativeSubmitKey::Enter
+                ),
+                platform::macos::NativeSubmitKey::Enter
+            );
+            assert_eq!(
+                submit_key_for_container_behavior(
+                    resolved.as_deref(),
+                    platform::macos::NativeSubmitKey::None
+                ),
+                platform::macos::NativeSubmitKey::None
+            );
+        }
+    }
+
+    #[test]
+    fn container_behavior_lookup_misses_safely() {
+        let library = library_with_behavior("target", "paste_only");
+        assert_eq!(
+            container_send_behavior_from_library(&library, "missing"),
+            None
+        );
+        assert_eq!(container_send_behavior_from_library("not json", "target"), None);
+        assert_eq!(
+            container_send_behavior_from_library("{\"version\":4}", "target"),
+            None
+        );
+    }
+
+    #[test]
+    fn prompt_library_selection_prefers_newest_readable_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "sleepy-cat-lib-select-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let older = dir.join("older.json");
+        let newer = dir.join("newer.json");
+        std::fs::write(&older, "{\"containers\":[]}").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&newer, "{\"containers\":[{\"id\":\"a\"}]}").unwrap();
+
+        let selected = select_prompt_library_text(&[older.clone(), newer.clone()]);
+        assert_eq!(selected.as_deref(), Some("{\"containers\":[{\"id\":\"a\"}]}"));
+
+        let missing = dir.join("missing.json");
+        let selected = select_prompt_library_text(&[missing, older.clone()]);
+        assert_eq!(selected.as_deref(), Some("{\"containers\":[]}"));
+
+        assert_eq!(select_prompt_library_text(&[dir.join("nope.json")]), None);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

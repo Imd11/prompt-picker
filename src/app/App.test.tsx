@@ -520,7 +520,7 @@ describe("app", () => {
     await waitFor(() => {
       expect(vi.mocked(invoke)).toHaveBeenCalledWith(
         "paste_prompt_and_submit_to_last_target",
-        { body: "Test body", submitKey: "none" }
+        { body: "Test body", submitKey: "none", containerId: "1" }
       );
     });
   });
@@ -983,7 +983,7 @@ describe("app", () => {
     await waitFor(() => {
       expect(vi.mocked(invoke)).toHaveBeenCalledWith(
         "paste_prompt_and_submit_to_last_target",
-        { body: "Test body", submitKey: "enter" }
+        { body: "Test body", submitKey: "enter", containerId: "1" }
       );
     });
   });
@@ -1031,6 +1031,7 @@ describe("app", () => {
         {
           body: "Command body",
           submitKey: "enter",
+          containerId: "command-enter",
         }
       );
     });
@@ -1076,7 +1077,7 @@ describe("app", () => {
     await waitFor(() => {
       expect(vi.mocked(invoke)).toHaveBeenCalledWith(
         "paste_prompt_and_submit_to_last_target",
-        { body: "Paste body", submitKey: "none" }
+        { body: "Paste body", submitKey: "none", containerId: "paste-only" }
       );
     });
     expect(emitMock).toHaveBeenCalledWith("prompt-autosend-status", {
@@ -1183,7 +1184,7 @@ describe("app", () => {
     await waitFor(() => {
       expect(vi.mocked(invoke)).toHaveBeenCalledWith(
         "paste_prompt_and_submit_to_last_target",
-        { body: "Test body", submitKey: "none" }
+        { body: "Test body", submitKey: "none", containerId: "1" }
       );
     });
     expect(vi.mocked(invoke)).not.toHaveBeenCalledWith(
@@ -1307,7 +1308,7 @@ describe("app", () => {
     await waitFor(() => {
       expect(vi.mocked(invoke)).toHaveBeenCalledWith(
         "paste_prompt_and_submit_to_last_target",
-        { body: "Test body", submitKey: "enter" }
+        { body: "Test body", submitKey: "enter", containerId: "1" }
       );
     });
     expect(callOrder.indexOf("invoke:hide_prompt_popover")).toBeLessThan(
@@ -1370,6 +1371,7 @@ describe("app", () => {
           bodies: ["First prompt", "Second prompt"],
           intervalMs: 700,
           submitKey: "enter",
+          containerId: "group-1",
         }
       );
     });
@@ -1431,6 +1433,7 @@ describe("app", () => {
           bodies: ["First prompt", "Second prompt"],
           intervalMs: 700,
           submitKey: "enter",
+          containerId: "group-1",
         }
       );
     });
@@ -1638,7 +1641,7 @@ describe("app", () => {
       await waitFor(() => {
         expect(vi.mocked(invoke)).toHaveBeenCalledWith(
           "paste_prompt_and_submit_to_last_target",
-          { body: "Test body", submitKey: "enter" }
+          { body: "Test body", submitKey: "enter", containerId: "1" }
         );
       });
     } finally {
@@ -1670,7 +1673,7 @@ describe("app", () => {
       expect(vi.mocked(invoke)).toHaveBeenCalledWith("hide_prompt_popover");
       expect(vi.mocked(invoke)).toHaveBeenCalledWith(
         "paste_prompt_and_submit_to_last_target",
-        { body: "Test body", submitKey: "enter" }
+        { body: "Test body", submitKey: "enter", containerId: "1" }
       );
     });
 
@@ -1740,7 +1743,7 @@ describe("app", () => {
     await waitFor(() => {
       expect(vi.mocked(invoke)).toHaveBeenCalledWith(
         "paste_prompt_and_submit_to_last_target",
-        { body: "Test body", submitKey: "enter" }
+        { body: "Test body", submitKey: "enter", containerId: "1" }
       );
     });
 

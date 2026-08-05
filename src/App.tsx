@@ -630,7 +630,8 @@ export function App({
         ? statusForAutosendOutcome(
           await pastePromptAndSubmitToLastTarget(
             pasteOnlyBody(prompt, bodies),
-            submitKey
+            submitKey,
+            prompt.id
           ),
           t,
           t.autosend.insertedIntoInput
@@ -640,12 +641,13 @@ export function App({
           await pastePromptSequenceAndSubmitToLastTarget(
             bodies,
             prompt.intervalMs,
-            submitKey
+            submitKey,
+            prompt.id
           ),
           t
         )
         : statusForAutosendOutcome(
-          await pastePromptAndSubmitToLastTarget(bodies[0], submitKey),
+          await pastePromptAndSubmitToLastTarget(bodies[0], submitKey, prompt.id),
           t
         );
       if (status.kind === "sent") {
