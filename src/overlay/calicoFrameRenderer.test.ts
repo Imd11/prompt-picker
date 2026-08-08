@@ -280,6 +280,23 @@ describe("bounded Calico frame renderer", () => {
     expect(canvas.style.getPropertyValue("--calico-offset-y")).toBe("6px");
   });
 
+  it("can apply presentation transforms to a stable host around the canvas", () => {
+    const canvas = fakeCanvas();
+    const presentationElement = document.createElement("div");
+    const renderer = createCalicoFrameRenderer({
+      canvas,
+      presentationElement,
+      createCanvas: () => fakeCanvas(),
+    });
+
+    renderer.setPresentation({ scale: 1.2, offsetX: -3, offsetY: 6 });
+
+    expect(presentationElement.style.getPropertyValue("--calico-scale")).toBe("1.2");
+    expect(presentationElement.style.getPropertyValue("--calico-offset-x")).toBe("-3px");
+    expect(presentationElement.style.getPropertyValue("--calico-offset-y")).toBe("6px");
+    expect(canvas.style.getPropertyValue("--calico-scale")).toBe("");
+  });
+
   it("retains the previous visible frame when a source-to-scratch draw fails", async () => {
     const visible = fakeCanvas();
     const drawFrame = vi.fn()

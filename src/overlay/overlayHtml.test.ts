@@ -199,6 +199,19 @@ describe("overlay button html", () => {
     expect(interactionHtml).toContain("calico-interaction");
   });
 
+  it("separates immediate state sizing from animated pointer feedback", () => {
+    const html = readOverlayHtml();
+
+    expect(html).toContain('id="calicoPosition" class="calico-position"');
+    expect(html).toContain('class="calico-interaction-motion"');
+    expect(html).toContain("presentationElement: visual");
+    expect(html).toContain(".calico-position {");
+    expect(html).toContain(".calico-interaction-motion {");
+    expect(html).toMatch(/\.calico-interaction-motion\s*\{[^}]*transition:\s*transform 140ms ease;/s);
+    expect(html).toMatch(/\.calico-sprite\s*\{[^}]*scale\(var\(--calico-scale\)\);/s);
+    expect(html).not.toMatch(/\.calico-sprite\s*\{[^}]*transition:/s);
+  });
+
   it("starts and pauses the Calico idle director from overlay events", () => {
     const html = readFileSync("public/overlay.html", "utf8");
 

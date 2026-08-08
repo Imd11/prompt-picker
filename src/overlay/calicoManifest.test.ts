@@ -228,4 +228,15 @@ describe("Calico manifest", () => {
 
     expect(calicoHitAreaSize).toBe(132);
   });
+
+  it("keeps celebration and sleep states optically aligned with idle", () => {
+    const manifest = readManifest();
+
+    expect(manifest.states.happy.scale).toBeGreaterThanOrEqual(1.18);
+    expect(manifest.states.happy.scale).toBeLessThanOrEqual(1.22);
+    for (const stateName of ["collapsing", "sleeping", "waking"]) {
+      expect(manifest.states[stateName].scale, stateName).toBeGreaterThanOrEqual(1.05);
+      expect(manifest.states[stateName].scale, stateName).toBeLessThanOrEqual(1.1);
+    }
+  });
 });

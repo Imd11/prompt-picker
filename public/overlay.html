@@ -24,6 +24,12 @@ body {
 }
 
 .calico-visual {
+  --calico-scale: 1;
+  --calico-offset-x: 0px;
+  --calico-offset-y: 0px;
+  --calico-hover-y: 0px;
+  --calico-press-y: 0px;
+  --calico-rotate: 0deg;
   width: var(--calico-hit-area-size);
   height: var(--calico-hit-area-size);
   display: grid;
@@ -31,70 +37,69 @@ body {
   position: relative;
 }
 
-.calico-sprite {
-  --calico-scale: 1;
-  --calico-offset-x: 0px;
-  --calico-offset-y: 0px;
-  --calico-hover-y: 0px;
-  --calico-press-y: 0px;
-  --calico-rotate: 0deg;
+.calico-position {
   position: absolute;
   inset: 50% auto auto 50%;
   width: var(--calico-sprite-size);
   height: var(--calico-sprite-size);
-  object-fit: contain;
-  pointer-events: none;
-  transform-origin: 45% 76%;
   transform:
     translate(
       calc(-50% + var(--calico-offset-x)),
-      calc(-50% + var(--calico-offset-y) + var(--calico-hover-y) + var(--calico-press-y))
-    )
-    rotate(var(--calico-rotate))
-    scale(var(--calico-scale));
+      calc(-50% + var(--calico-offset-y))
+    );
+}
+
+.calico-interaction-motion {
+  width: 100%;
+  height: 100%;
+  transform-origin: 45% 76%;
+  transform:
+    translateY(calc(var(--calico-hover-y) + var(--calico-press-y)))
+    rotate(var(--calico-rotate));
   transition: transform 140ms ease;
+}
+
+.calico-sprite {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  transform-origin: 45% 76%;
+  transform: scale(var(--calico-scale));
 }
 
 .calico-sprite[hidden] {
   display: none;
 }
 
-.calico-visual.is-hovering .calico-sprite {
+.calico-visual.is-hovering {
   --calico-hover-y: -2px;
 }
 
-.calico-visual.is-pressing .calico-sprite {
+.calico-visual.is-pressing {
   --calico-press-y: 1px;
 }
 
-.calico-visual[data-motion-state="react-drag"] .calico-sprite,
-.calico-visual.is-dragging .calico-sprite {
+.calico-visual[data-motion-state="react-drag"],
+.calico-visual.is-dragging {
   --calico-rotate: -2deg;
 }
 
-.calico-visual[data-motion-state="idle-follow"] .calico-sprite,
-.calico-visual[data-motion-state="idle"] .calico-sprite {
+.calico-visual[data-motion-state="idle-follow"] .calico-interaction-motion,
+.calico-visual[data-motion-state="idle"] .calico-interaction-motion {
   animation: calico-idle-breath 1800ms ease-in-out infinite alternate;
 }
 
 @keyframes calico-idle-breath {
   from {
     transform:
-      translate(
-        calc(-50% + var(--calico-offset-x)),
-        calc(-50% + var(--calico-offset-y) + var(--calico-hover-y) + var(--calico-press-y))
-      )
-      rotate(var(--calico-rotate))
-      scale(var(--calico-scale));
+      translateY(calc(var(--calico-hover-y) + var(--calico-press-y)))
+      rotate(var(--calico-rotate));
   }
   to {
     transform:
-      translate(
-        calc(-50% + var(--calico-offset-x)),
-        calc(-50% + var(--calico-offset-y) + var(--calico-hover-y) + var(--calico-press-y) - 1px)
-      )
-      rotate(var(--calico-rotate))
-      scale(var(--calico-scale));
+      translateY(calc(var(--calico-hover-y) + var(--calico-press-y) - 1px))
+      rotate(var(--calico-rotate));
   }
 }
 
@@ -143,14 +148,18 @@ body {
 <body>
 <div id="statusBubble" class="calico-status-bubble" aria-live="polite"></div>
 <div id="calicoVisual" class="calico-visual" data-motion-state="idle-follow">
-  <canvas id="calicoCanvas" class="calico-sprite" width="252" height="252" aria-hidden="true"></canvas>
+  <div id="calicoPosition" class="calico-position">
+    <div class="calico-interaction-motion">
+      <canvas id="calicoCanvas" class="calico-sprite" width="252" height="252" aria-hidden="true"></canvas>
+    </div>
+  </div>
 </div>
 <script type="module">
 const visual = document.getElementById('calicoVisual');
 const calicoCanvas = document.getElementById('calicoCanvas');
 const statusBubble = document.getElementById('statusBubble');
 const tauri = window.__TAURI__;
-const CALICO_ASSET_VERSION = '1.0.16-calico-waking-transition-v1';
+const CALICO_ASSET_VERSION = '1.0.17-calico-optical-size-v1';
 const rendererInstanceId = Number(new URLSearchParams(window.location.search).get('rendererInstanceId'));
 let motionResetTimer = 0;
 let statusTimer = 0;
@@ -278,6 +287,7 @@ async function initializeCalicoMotionOnce() {
       calicoCanvas.height = Math.max(1, Math.round(126 * currentDpr));
       calicoRenderer = createCalicoFrameRenderer({
         canvas: calicoCanvas,
+        presentationElement: visual,
         assetVersion: CALICO_ASSET_VERSION,
         onError: (error) => console.error('Calico renderer error', error),
         onFatalRender: reportFatalRendererError,

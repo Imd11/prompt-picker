@@ -156,6 +156,7 @@ export function createCalicoFrameRenderer(options) {
   options = options || {};
   var canvas = options.canvas;
   if (!canvas) throw new Error("Calico renderer requires one canvas");
+  var presentationElement = options.presentationElement || canvas;
   var createCanvas = options.createCanvas || function () { return document.createElement("canvas"); };
   var scratch = createCanvas();
   var visibleContext = canvas.getContext("2d", { alpha: true });
@@ -456,9 +457,9 @@ export function createCalicoFrameRenderer(options) {
 
   function setPresentation(presentation) {
     presentation = presentation || {};
-    canvas.style.setProperty("--calico-scale", String(presentation.scale || 1));
-    canvas.style.setProperty("--calico-offset-x", String(presentation.offsetX || 0) + "px");
-    canvas.style.setProperty("--calico-offset-y", String(presentation.offsetY || 0) + "px");
+    presentationElement.style.setProperty("--calico-scale", String(presentation.scale || 1));
+    presentationElement.style.setProperty("--calico-offset-x", String(presentation.offsetX || 0) + "px");
+    presentationElement.style.setProperty("--calico-offset-y", String(presentation.offsetY || 0) + "px");
   }
 
   function redrawCurrentFrame() {

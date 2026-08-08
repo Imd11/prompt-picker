@@ -140,8 +140,8 @@
       "durationMs": 3000,
       "minMs": 800,
       "replay": true,
-      "scale": 1.0,
-      "offsetX": 8,
+      "scale": 1.2,
+      "offsetX": 7,
       "offsetY": 6
     },
     "react-drag": {
@@ -176,7 +176,7 @@
       "durationMs": 5200,
       "minMs": 800,
       "replay": true,
-      "scale": 0.95,
+      "scale": 1.08,
       "offsetX": 8,
       "offsetY": -5
     },
@@ -185,7 +185,7 @@
       "durationMs": 0,
       "minMs": 0,
       "replay": false,
-      "scale": 0.94,
+      "scale": 1.08,
       "offsetX": 8,
       "offsetY": -5
     },
@@ -195,7 +195,7 @@
       "minMs": 800,
       "replay": true,
       "completeBeforeTransition": true,
-      "scale": 0.93,
+      "scale": 1.08,
       "offsetX": 8,
       "offsetY": -5
     },
