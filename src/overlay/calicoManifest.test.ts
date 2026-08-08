@@ -1,5 +1,10 @@
 import { existsSync, readFileSync, readdirSync } from "fs";
 import { describe, expect, it, vi } from "vitest";
+import {
+  decodeRgbaPng,
+  measureMotionVisual,
+  type SheetGeometry,
+} from "./calicoVisualMetrics";
 
 type CalicoState = {
   file?: string;
@@ -13,9 +18,7 @@ type CalicoState = {
   offsetY: number;
 };
 
-type SheetManifest = {
-  states: Record<string, { file: string; frameCount: number }>;
-};
+type SheetManifest = { states: Record<string, SheetGeometry> };
 
 type CalicoManifest = {
   schemaVersion: number;
@@ -229,14 +232,41 @@ describe("Calico manifest", () => {
     expect(calicoHitAreaSize).toBe(132);
   });
 
-  it("keeps celebration and sleep states optically aligned with idle", () => {
+  it("keeps every full-size motion optically aligned with idle", () => {
     const manifest = readManifest();
+    const sheetManifest = readSheetManifest();
+    // Mini motions intentionally use a separate scale and lower-screen position.
+    const fullSizeStates = [...phase1States, ...reservedStates]
+      .filter((stateName) => stateName !== "idle-follow" && !stateName.startsWith("mini-"));
+    // These two sheets connect a wide desktop surface to the character. Limit
+    // optical measurement to the character region while still testing the
+    // complete sprite against the native window in the existing bounds test.
+    const bodyRegionBottom: Record<string, number> = {
+      "working-typing": 160,
+      "working-sweeping": 170,
+    };
+    const metrics = new Map(fullSizeStates.map((stateName) => {
+      const sheet = sheetManifest.states[stateName];
+      const png = decodeRgbaPng(`public${sheet.file}`);
+      return [stateName, measureMotionVisual(
+        png,
+        sheet,
+        manifest.states[stateName],
+        stateName === "react-drag" ? -2 : 0,
+        bodyRegionBottom[stateName],
+      )];
+    }));
+    const idleArea = metrics.get("idle")!.medianPrimaryArea;
 
-    expect(manifest.states.happy.scale).toBeGreaterThanOrEqual(1.18);
-    expect(manifest.states.happy.scale).toBeLessThanOrEqual(1.22);
-    for (const stateName of ["collapsing", "sleeping", "waking"]) {
-      expect(manifest.states[stateName].scale, stateName).toBeGreaterThanOrEqual(1.05);
-      expect(manifest.states[stateName].scale, stateName).toBeLessThanOrEqual(1.1);
+    for (const stateName of fullSizeStates) {
+      const stateMetrics = metrics.get(stateName)!;
+      const ratio = stateMetrics.medianPrimaryArea / idleArea;
+      expect(ratio, `${stateName} optical area`).toBeGreaterThanOrEqual(0.9);
+      expect(ratio, `${stateName} optical area`).toBeLessThanOrEqual(1.1);
+      expect(stateMetrics.nativeWindowContained, `${stateName} native bounds`).toBe(true);
+      const minimumCoverage = stateName === "working-carrying" ? 0.8 : 0.95;
+      expect(stateMetrics.minimumHitCoverage, `${stateName} hit coverage`)
+        .toBeGreaterThanOrEqual(minimumCoverage);
     }
-  });
+  }, 30_000);
 });
